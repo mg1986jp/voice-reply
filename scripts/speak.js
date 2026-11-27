@@ -18,6 +18,7 @@
  *   voices/              声ごとの読み上げ処理と、OS に合う声の選択
  *
  * 読み上げがオフ（/voice-reply:toggle off）のときは、何もせずにすぐ終わる。
+ * 順番待ちのあいだにオフにされたときも、順番が来た時点で確かめ直して、読まずに終わる。
  * 一時ファイルはプラグインのデータフォルダ（CLAUDE_PLUGIN_DATA）の tmp/ に置く。
  * 声と速さの設定は voices/ の各ファイルを参照。Node の標準モジュールだけで動く（npm パッケージ不要）。
  */
@@ -77,6 +78,9 @@ async function main() {
 
   try {
     if (!(await queue.acquire())) return;
+    // 順番待ちのあいだにオフにされていたら、読まずに終わる（ロックは finally で返す）。
+    // 読み始めたあとにオフにされた場合は、確かめ直さずに最後まで読む
+    if (!isEnabled(dataDir)) return;
     await voice.speak(speechText);
   } finally {
     queue.release();
