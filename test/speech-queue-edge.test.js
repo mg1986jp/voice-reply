@@ -115,6 +115,24 @@ test('state が一時的に読めない間は、持ち主はロックを失っ�
   assert.deepEqual(reasons, []);
 });
 
+test('ロックを返すときに state が一時的に読めず、持ち主か確かめられないときは、ロックに触らない', async (t) => {
+  const workDir = h.makeWorkDir(t);
+  const reader = new SpeechQueue('tab-A', workDir);
+  assert.equal(await reader.acquire(), true);
+  const owned = h.readState(workDir);
+
+  const restore = h.patchFs('readFileSync', (real, args) => {
+    if (args[0] === h.stateFile(workDir)) throw h.fsError('EBUSY');
+    return real(...args);
+  });
+  t.after(restore);
+  reader.release();
+  restore();
+
+  assert.equal(fs.existsSync(h.lockDir(workDir)), true, '確かめられないときは消さない');
+  assert.deepEqual(h.readState(workDir), owned);
+});
+
 test('合図の古いロックでも、state が一時的に読めない間は片付けず、読めるようになってから片付ける', async (t) => {
   const workDir = h.makeWorkDir(t);
   h.plantLock(workDir, { requestId: 'dead-owner', session: 'tab-X', beatAt: Date.now() - 3500 });

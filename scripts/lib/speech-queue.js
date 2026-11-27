@@ -178,15 +178,17 @@ class SpeechQueue {
   }
 
   /**
-   * ロックを返す。state が自分のものでないと分かったとき（ほかのタブに取られたとき）は、相手のロックに触らない。
-   * 一時的に読めないときは、自分のものとして返す（返さずにいると、ほかのタブが STALE_AFTER_MS 待たされるため）。
+   * ロックを返す。state が自分のものだと確かめられたときだけ消す。
+   * 自分のものでないとき（ほかのタブに取られたとき）や、一時的に読めずに確かめられないときは、触らずに終わる。
+   * 確かめられないまま消すと、ほかのタブが取り直したロックを消してしまうおそれがあるため。
+   * 触らずに終わったロックが自分のものでも、合図が止まるので、STALE_AFTER_MS のあとにほかのタブが片付ける。
    */
   release() {
     this.stopWatching();
     if (!this.#locked) return;
     this.#locked = false;
     removeQuietly(fs.rmSync, this.#stateTmp);
-    if (this.#ownsLock() === false) return;
+    if (this.#ownsLock() !== true) return;
     removeQuietly(fs.rmSync, this.#stateFile);
     removeQuietly(fs.rmdirSync, this.#lockDir);
   }
