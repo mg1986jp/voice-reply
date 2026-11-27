@@ -173,8 +173,12 @@ test('Mac: WAV ごとに afplay を起動し、起動できたら鳴らし始め
     fake.spawned.map((child) => [child.command, child.args, child.options]),
     cases.map(([file]) => ['afplay', [file], { stdio: 'ignore' }]),
   );
+
+  // 鳴らし終えた afplay を「今の子」にしてから stop() を呼んでも、その子は止めない
+  assert.deepEqual(await player.play('ok.wav'), { played: true, started: true });
+  const finished = fake.spawned[fake.spawned.length - 1];
   player.stop();
-  assert.deepEqual(fake.spawned[0].kills, [], '鳴らし終えた afplay は止めない');
+  assert.deepEqual(finished.kills, [], '鳴らし終えた今の afplay は止めない');
 });
 
 test('Mac: stop() は鳴らしている afplay を SIGKILL で止め、このあとの play() は afplay を起動しない。鳴らす前の stop() と close() は何もしない', async () => {
