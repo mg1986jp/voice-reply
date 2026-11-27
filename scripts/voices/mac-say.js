@@ -2,8 +2,8 @@
  * 声: macOS の say コマンド
  *
  * 設定（環境変数）:
- *   CLAUDE_SAY_VOICE  声の名前（初期値: Kyoko）
- *   CLAUDE_SAY_RATE   速さ（say -r の値。正の整数、初期値 260）
+ *   VOICE_REPLY_MAC_VOICE  声の名前（初期値: Kyoko）
+ *   VOICE_REPLY_MAC_RATE   速さ（say -r の値。正の整数、初期値 260）
  */
 'use strict';
 
@@ -63,7 +63,7 @@ class MacSay {
 
   /**
    * 1 秒に読む文字数（速さの設定から見積もる）。-r にほぼ比例し、MAX_EFFECTIVE_RATE で頭打ちにする。
-   * Kyoko で測った値なので、CLAUDE_SAY_VOICE でほかの声にしたときは、実際の速さとずれることがある。
+   * Kyoko で測った値なので、VOICE_REPLY_MAC_VOICE でほかの声にしたときは、実際の速さとずれることがある。
    */
   charsPerSecond() {
     return (CHARS_PER_SECOND_AT_DEFAULT_RATE * Math.min(this.#rate, MAX_EFFECTIVE_RATE)) / DEFAULT_RATE;
@@ -72,7 +72,7 @@ class MacSay {
 
 /** 環境変数の設定から作る */
 function create(env) {
-  return new MacSay(env.CLAUDE_SAY_VOICE || DEFAULT_VOICE, parseRate(env.CLAUDE_SAY_RATE));
+  return new MacSay(env.VOICE_REPLY_MAC_VOICE || DEFAULT_VOICE, parseRate(env.VOICE_REPLY_MAC_RATE));
 }
 
 module.exports = { create };
