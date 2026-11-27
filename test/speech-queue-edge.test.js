@@ -222,19 +222,22 @@ test('片付けで作業フォルダの一覧を読めないときや、ファ�
   const old = (Date.now() - 25 * 60 * 60 * 1000) / 1000;
   fs.utimesSync(oldFile, old, old);
 
-  let restore = h.patchFs('readdirSync', () => {
+  // 差し替えは登録した直後に元に戻す予約をする（アサーションが失敗しても、差し替えが残らないように）
+  const restoreReaddir = h.patchFs('readdirSync', () => {
     throw h.fsError('EACCES');
   });
+  t.after(restoreReaddir);
   assert.doesNotThrow(() => queue.cleanupTempFiles());
-  restore();
+  restoreReaddir();
   assert.equal(fs.existsSync(oldFile), true);
 
-  restore = h.patchFs('statSync', (real, args) => {
+  const restoreStat = h.patchFs('statSync', (real, args) => {
     if (args[0] === oldFile) throw h.fsError('EPERM');
     return real(...args);
   });
+  t.after(restoreStat);
   assert.doesNotThrow(() => queue.cleanupTempFiles());
-  restore();
+  restoreStat();
   assert.equal(fs.existsSync(oldFile), true);
 
   queue.cleanupTempFiles();
