@@ -6,8 +6,12 @@
  *   <PID>.done     最後まで読んだ（FAKE_VOICE_MS ミリ秒かかる）
  *   <PID>.killed   途中で止められた
  *
+ * AivisSpeech の音を鳴らす afplay も偽物にする。鳴らした WAV の中身を、鳴らした順に 1 行ずつ <PID>.afplay に書き、
+ * FAKE_VOICE_MS ミリ秒で鳴らし終えたことにする（止められたら、そこで終わる）。
+ *
  * FAKE_SIGTERM_AFTER_START を付けると、読み始めてからそのミリ秒後に、プロセスに SIGTERM が届いたことにする
  * （Windows では外から送るとハンドラーが動かずに終わるため、process.emit で起こす）。
+ * FAKE_SIGTERM_ON_FILE を付けると、そのファイルができたときに、プロセスに SIGTERM が届いたことにする（読み始める前に起こすため）。
  *
  * 読み上げの時間の決まり（scripts/lib/speech-limit.js）を、speak.js が読み込む前に差し替える（環境変数があるときだけ）:
  *   FAKE_TIME_LIMIT_MS  読み上げの時間の上限（声の速さによらず、このミリ秒にする）
@@ -40,6 +44,13 @@ const afterStart = {
   false: () => {},
 }[String('FAKE_SIGTERM_AFTER_START' in process.env)];
 
+// ファイルができたら SIGTERM を起こすかどうか（環境変数があるときだけ）
+const sigtermOnFile = {
+  true: () => setInterval(() => fs.existsSync(process.env.FAKE_SIGTERM_ON_FILE) && process.emit('SIGTERM', 'SIGTERM'), 20).unref(),
+  false: () => {},
+}[String('FAKE_SIGTERM_ON_FILE' in process.env)];
+sigtermOnFile();
+
 // 読み上げの時間の決まりの差し替え: [環境変数, 差し替える値を作る関数]（環境変数があるものだけ差し替える）
 const SPEECH_LIMIT_OVERRIDES = [
   ['FAKE_TIME_LIMIT_MS', (ms) => ({ voiceTimeLimitMs: () => ms })],
@@ -61,7 +72,8 @@ process.on('exit', () => mark('timers', JSON.stringify(timerDelays)));
 const killIgnored = String('FAKE_KILL_IGNORED' in process.env);
 let ignoredKills = 0;
 
-childProcess.spawn = function fakeSpawn() {
+/** 偽の say */
+function fakeSay() {
   const child = new EventEmitter();
   child.exitCode = null;
   child.signalCode = null;
@@ -95,7 +107,29 @@ childProcess.spawn = function fakeSpawn() {
     },
   });
   return child;
-};
+}
+
+/** 偽の afplay（AivisSpeech の音）。鳴らした WAV の中身を <PID>.afplay に書き足し、FAKE_VOICE_MS ミリ秒で鳴らし終えたことにする */
+function fakeAfplay(args) {
+  const child = new EventEmitter();
+  child.exitCode = null;
+  child.signalCode = null;
+  fs.appendFileSync(path.join(dir, `${process.pid}.afplay`), `${fs.readFileSync(args[0], 'utf8')}\n`);
+  const timer = setTimeout(() => {
+    child.exitCode = 0;
+    child.emit('close', 0, null);
+  }, duration);
+  child.kill = () => {
+    clearTimeout(timer);
+    child.signalCode = 'SIGKILL';
+    child.emit('close', null, 'SIGKILL');
+  };
+  return child;
+}
+
+/** コマンドごとの偽物。表にないコマンド（say）は偽の say にする */
+const FAKE_COMMANDS = { afplay: fakeAfplay };
+childProcess.spawn = (command, args) => ({ [command]: fakeSay, ...FAKE_COMMANDS })[command](args);
 
 // 速さを見積もれない声にする（環境変数があるときだけ）。speak.js は voices/index.js を通して mac-say.create() を呼ぶ。
 // mac-say.js は読み込んだ時点で spawn を受け取るので、spawn を偽物に差し替えたあとに読み込む
