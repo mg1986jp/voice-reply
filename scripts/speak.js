@@ -81,7 +81,8 @@ async function main() {
     // 順番待ちのあいだにオフにされていたら、読まずに終わる（ロックは finally で返す）。
     // 読み始めたあとにオフにされた場合は、確かめ直さずに最後まで読む
     if (!isEnabled(dataDir)) return;
-    // 同じタブの新しい返事が来たら、自分の声だけを止める（声が止まると読み上げが終わり、finally でロックを返す）
+    // 同じタブの新しい返事が来たとき、またはロックを失ったとき（合図が途切れた間にほかのタブに取られたとき）は、
+    // 自分の声だけを止める（声が止まると読み上げが終わり、finally でロックを返す）
     queue.startWatching(() => voice.kill());
     await voice.speak(speechText);
   } finally {
