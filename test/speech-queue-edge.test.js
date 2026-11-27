@@ -60,13 +60,16 @@ test('待っている間にタブの latest-* が消されても、自分を最�
   h.plantLock(workDir, { ...owner, beatAt: Date.now() });
   const beat = setInterval(() => h.writeState(workDir, { ...owner, beatAt: Date.now() }), 300);
   t.after(() => clearInterval(beat));
-  // 待っている側がロックを調べた回数を数える（数えるだけで、いつも本物を呼ぶ）
+  // 待っている側がロックを取ろうとした回数と、調べた回数を数える（数えるだけで、いつも本物を呼ぶ）
+  const restoreMkdir = h.hookFs('mkdirSync', { [h.lockDir(workDir)]: {} });
+  t.after(restoreMkdir);
   const restoreStat = h.hookFs('statSync', { [h.lockDir(workDir)]: {} });
   t.after(restoreStat);
   const checks = () => h.lookup(restoreStat.counts, h.lockDir(workDir), 0);
 
   const waiting = h.track(new SpeechQueue('tab-A', workDir).acquire());
-  await h.sleep(300);
+  // ロックを取ろうとした（順番待ちに入った）ことを確かめてから、latest-* を消す
+  await h.waitFor(() => h.lookup(restoreMkdir.counts, h.lockDir(workDir), 0) >= 1, 2000, '待っている側がロックを取ろうとする');
   fs.rmSync(h.latestFile(workDir, 'tab-A'));
   const seen = checks();
   await h.waitFor(() => checks() >= seen + 3, 2000, 'latest-* が消えたあと、ロックを 3 回調べる');

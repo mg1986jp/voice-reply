@@ -267,9 +267,13 @@ test('ロックを取るまでの間に同じタブの新しい要求に追い�
   h.plantLock(workDir, { requestId: 'other-owner', session: 'tab-X', beatAt: Date.now() });
   const beat = setInterval(() => h.writeState(workDir, { requestId: 'other-owner', session: 'tab-X', beatAt: Date.now() }), 300);
   t.after(() => clearInterval(beat));
+  // 待っている側がロックを取ろうとした回数を数える（数えるだけで、いつも本物を呼ぶ）
+  const restore = h.hookFs('mkdirSync', { [h.lockDir(workDir)]: {} });
+  t.after(restore);
 
   const waiting = h.track(new SpeechQueue('tab-A', workDir).acquire());
-  await h.sleep(300);
+  // ロックを取ろうとした（順番待ちに入った）ことを確かめてから、同じタブの新しい要求を出す
+  await h.waitFor(() => h.lookup(restore.counts, h.lockDir(workDir), 0) >= 1, 2000, '待っている側がロックを取ろうとする');
   const newer = h.track(new SpeechQueue('tab-A', workDir).acquire());
   assert.equal(await waiting.promise, false);
   assert.equal(newer.settled, false);
