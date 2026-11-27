@@ -46,13 +46,18 @@ test('別のタブは、ロックが返されるまで順番を待ち、返さ�
   const workDir = h.makeWorkDir(t);
   const reader = new SpeechQueue('tab-A', workDir);
   assert.equal(await reader.acquire(), true);
+  // 待っている側がロックを調べた回数を数える（数えるだけで、いつも本物を呼ぶ）
+  const restore = h.hookFs('statSync', { [h.lockDir(workDir)]: {} });
+  t.after(restore);
+  const checks = () => h.lookup(restore.counts, h.lockDir(workDir), 0);
   const otherQueue = new SpeechQueue('tab-B', workDir);
   const other = h.track(otherQueue.acquire());
   // アサーションが失敗しても、見張りを止め、待っている取得を回収してから終わる（作業フォルダを消す前に）
   try {
     reader.startWatching(() => assert.fail('別のタブの要求で止めてはいけない'));
-    await h.sleep(800);
-    assert.equal(other.settled, false, '持ち主が読んでいる間は待つ');
+    // 5 回調べる間に（0.15 秒ごとなので 0.6 秒以上）、持ち主は合図を書き直す
+    await h.waitFor(() => checks() >= 5, 3000, '待っている側がロックを 5 回調べる');
+    assert.equal(other.settled, false, '持ち主が読んでいる間は、何回調べても待つ');
     assert.equal(h.readState(workDir).session, 'tab-A');
 
     const releasedAt = Date.now();
@@ -148,10 +153,12 @@ test('合図が古いと判定したあと、消す直前に state がなくな�
   };
   const restore = h.hookFs('statSync', { [h.lockDir(workDir)]: { 2: anotherTabRetook } });
   t.after(restore);
+  const checks = () => h.lookup(restore.counts, h.lockDir(workDir), 0);
 
   const queue = h.track(new SpeechQueue('tab-B', workDir).acquire());
   await h.waitFor(() => recreated !== null, 2000, '読み直しまで進む');
-  await h.sleep(400);
+  const seen = checks();
+  await h.waitFor(() => checks() >= seen + 3, 2000, '取り直されたロックを、さらに 3 回調べる');
   restore();
   assert.equal(queue.settled, false);
   assert.equal(h.lockIdentity(workDir), recreated, '取り直されたロックを消してはいけない');
@@ -175,10 +182,12 @@ test('state のない古いロックは、消す直前にフォルダが作り�
   };
   const restore = h.hookFs('statSync', { [h.lockDir(workDir)]: { 1: looksSixSecondsOld, 2: anotherTabRetook } });
   t.after(restore);
+  const checks = () => h.lookup(restore.counts, h.lockDir(workDir), 0);
 
   const queue = h.track(new SpeechQueue('tab-B', workDir).acquire());
   await h.waitFor(() => recreated !== null, 2000, '消す直前の読み直しまで進む');
-  await h.sleep(400);
+  const seen = checks();
+  await h.waitFor(() => checks() >= seen + 3, 2000, '作り直されたロックを、さらに 3 回調べる');
   restore();
   assert.equal(queue.settled, false);
   assert.equal(h.lockIdentity(workDir), recreated, '作り直されたロックを消してはいけない');
@@ -199,10 +208,12 @@ test('合図が古いと判定したあと、消す直前に合図が新しく�
   };
   const restore = h.hookFs('statSync', { [h.lockDir(workDir)]: { 2: ownerResumed } });
   t.after(restore);
+  const checks = () => h.lookup(restore.counts, h.lockDir(workDir), 0);
 
   const queue = h.track(new SpeechQueue('tab-B', workDir).acquire());
   await h.waitFor(() => resumed !== null, 2000, '読み直しまで進む');
-  await h.sleep(300);
+  const seen = checks();
+  await h.waitFor(() => checks() >= seen + 3, 2000, '復帰した持ち主のロックを、さらに 3 回調べる');
   restore();
   assert.equal(queue.settled, false);
   assert.deepEqual(h.readState(workDir), resumed, '復帰した持ち主のロックを消してはいけない');

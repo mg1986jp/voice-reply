@@ -60,11 +60,16 @@ test('待っている間にタブの latest-* が消されても、自分を最�
   h.plantLock(workDir, { ...owner, beatAt: Date.now() });
   const beat = setInterval(() => h.writeState(workDir, { ...owner, beatAt: Date.now() }), 300);
   t.after(() => clearInterval(beat));
+  // 待っている側がロックを調べた回数を数える（数えるだけで、いつも本物を呼ぶ）
+  const restoreStat = h.hookFs('statSync', { [h.lockDir(workDir)]: {} });
+  t.after(restoreStat);
+  const checks = () => h.lookup(restoreStat.counts, h.lockDir(workDir), 0);
 
   const waiting = h.track(new SpeechQueue('tab-A', workDir).acquire());
   await h.sleep(300);
   fs.rmSync(h.latestFile(workDir, 'tab-A'));
-  await h.sleep(400);
+  const seen = checks();
+  await h.waitFor(() => checks() >= seen + 3, 2000, 'latest-* が消えたあと、ロックを 3 回調べる');
   assert.equal(waiting.settled, false);
   clearInterval(beat);
   fs.rmSync(h.stateFile(workDir));
@@ -131,7 +136,8 @@ test('合図の古いロックでも、state が一時的に読めない間は�
   t.after(restore);
 
   const queue = h.track(new SpeechQueue('tab-B', workDir).acquire());
-  await h.sleep(600);
+  // ロックを調べるたびに state を 1 回読む。その読み取りに 3 回失敗するまで待つ
+  await h.waitFor(() => h.lookup(restore.counts, h.stateFile(workDir), 0) >= 3, 2000, 'ロックを 3 回調べる（state はいつも読めない）');
   assert.equal(queue.settled, false);
   assert.equal(h.readState(workDir).requestId, 'dead-owner');
   restore();
@@ -146,7 +152,7 @@ test('ロックのフォルダを一時的に調べられない間は片付け�
   t.after(restore);
 
   const queue = h.track(new SpeechQueue('tab-B', workDir).acquire());
-  await h.sleep(600);
+  await h.waitFor(() => h.lookup(restore.counts, h.lockDir(workDir), 0) >= 3, 2000, 'ロックを 3 回調べる（フォルダはいつも調べられない）');
   assert.equal(queue.settled, false);
   assert.equal(h.readState(workDir).requestId, 'dead-owner');
   restore();
