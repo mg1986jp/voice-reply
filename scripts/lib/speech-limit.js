@@ -1,13 +1,16 @@
 /**
- * 1 回の読み上げの時間の上限と、読み上げを止めるときの時間の決まり（OS や声に依存しない）
+ * 読み上げの時間の上限と、読み上げを止めるときの時間の決まり（OS や声に依存しない）
  *
  *   voiceTimeLimitMs(voice, text)             声と文章から、読み上げの時間の上限を決める
  *   speechTimeLimitMs(text, charsPerSecond)   文字数と速さから、読み上げの時間の上限を決める
+ *   SpeechLimitTimer                          上限を見張るタイマー。声が読む区切りごとに測り直す
  *   STOP_GRACE_MS                             声を止めてから、読み上げが終わるのを待つ上限
  *
  * 声だけが固まって読み上げが終わらないと、ロックが返らず、ほかのタブが待たされ続ける（合図は書かれ続けるため）。
  * そこで、読み終わるまでの時間を文字数と声の速さから見積もり、その LIMIT_FACTOR 倍に LIMIT_EXTRA_MS を足した時間を上限にする。
- * 文章の長さは制限しない。長い文章ほど上限も長くなる。
+ * 上限は、声が読む区切りごとに決める。OS の声は全体が1つの区切り、AivisSpeech は文ごとの区切り
+ * （文ごとにすると、音声を作る時間が読む時間より長い PC でも、固まった文にすぐ気づける）。
+ * 文章の長さは制限しない。長い区切りほど上限も長くなる。
  */
 'use strict';
 
@@ -53,4 +56,29 @@ function voiceTimeLimitMs(voice, text) {
   return speechTimeLimitMs(text, voice.charsPerSecond());
 }
 
-module.exports = { voiceTimeLimitMs, speechTimeLimitMs, STOP_GRACE_MS };
+/**
+ * 読み上げの時間の上限を見張るタイマー。声が新しい区切りに取りかかるたびに restart() で測り直し、
+ * 1 つの区切りが上限を超えたら onExpire() を呼ぶ（speak.js は自分の声を止める）。
+ */
+class SpeechLimitTimer {
+  #onExpire;
+  #timer = null;
+
+  /** @param {() => void} onExpire 上限を超えたときに呼ぶ */
+  constructor(onExpire) {
+    this.#onExpire = onExpire;
+  }
+
+  /** 新しい区切りの上限（ミリ秒）で測り直す。null なら測らない（速さを見積もれない声） */
+  restart(limitMs) {
+    this.clear();
+    if (limitMs !== null) this.#timer = setTimeout(this.#onExpire, limitMs);
+  }
+
+  clear() {
+    clearTimeout(this.#timer);
+    this.#timer = null;
+  }
+}
+
+module.exports = { voiceTimeLimitMs, speechTimeLimitMs, SpeechLimitTimer, STOP_GRACE_MS };

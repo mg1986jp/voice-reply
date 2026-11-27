@@ -71,7 +71,9 @@ class WindowsSapi {
     this.#rate = rate;
   }
 
-  speak(text) {
+  speak(text, { onSegment = () => {} } = {}) {
+    // 全体を1つの区切りとして読む（読み上げの時間の上限は、全体に1つ）
+    onSegment(text, this);
     return new Promise((resolve) => {
       const encoded = Buffer.from(SPEAK_SCRIPT, 'utf16le').toString('base64');
       this.#proc = spawn(WIN_POWERSHELL, ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded], {
