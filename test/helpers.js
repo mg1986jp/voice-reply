@@ -56,25 +56,48 @@ function writeState(workDir, state) {
   writeRawState(workDir, JSON.stringify(state));
 }
 
-/**
- * fs の関数を一時的に差し替える。impl(real, args) の返り値を返し、例外を投げればそれが起きたことになる。
- * 返り値の関数で元に戻す。
- */
-function patchFs(name, impl) {
-  const real = realFs[name];
-  fs[name] = function patched(...args) {
-    return impl((...a) => real.apply(fs, a), args);
-  };
-  return () => {
-    fs[name] = real;
-  };
-}
-
 /** code を持つ Error（EBUSY など、わざと起こす失敗） */
 function fsError(code) {
   const err = new Error(`${code}: injected by test`);
   err.code = code;
   return err;
+}
+
+/** hookFs() の表に入れる動き: 本物の fs をそのまま呼ぶ */
+const passThrough = (real, args) => real(...args);
+/** hookFs() の表に入れる動き: code の失敗を起こす */
+const throws = (code) => () => {
+  throw fsError(code);
+};
+
+/**
+ * fs.<name> を一時的に差し替える。
+ *
+ * plan は「パス → 回数ごとの動き」の表。args[argIndex] が plan にあるパスの呼び出しだけ、そのパスへの何回目の呼び出しかを数え、
+ * plan[パス][回数]、なければ plan[パス].other、それもなければ本物の fs を呼ぶ。plan にないパスは、いつも本物に任せる。
+ * 動きは (real, args) を受け取る関数で、本物を呼ぶときは real(...args) を返す。
+ *
+ *   hookFs('renameSync', { [stateFile]: { 1: throws('EBUSY') } }, { argIndex: 1 })   // 1 回目だけ失敗させる
+ *   hookFs('readFileSync', { [stateFile]: { other: throws('EBUSY') } })               // 元に戻すまで失敗させる
+ *
+ * 返り値の関数で元に戻す。その関数の counts に、パスごとの呼び出し回数が入る。
+ */
+function hookFs(name, plan, { argIndex = 0 } = {}) {
+  const real = (...args) => realFs[name].apply(fs, args);
+  const counts = {};
+  const planned = (target, args) => {
+    counts[target] = lookup(counts, target, 0) + 1;
+    const calls = plan[target];
+    return lookup(calls, counts[target], lookup(calls, 'other', passThrough))(real, args);
+  };
+  const unplanned = (_target, args) => real(...args);
+  const routes = Object.fromEntries(Object.keys(plan).map((target) => [target, planned]));
+  fs[name] = (...args) => lookup(routes, args[argIndex], unplanned)(args[argIndex], args);
+  const restore = () => {
+    fs[name] = realFs[name];
+  };
+  restore.counts = counts;
+  return restore;
 }
 
 /** state のないロックを置く（ロックを作ってから state を書く前に落ちた持ち主のもの、など） */
@@ -136,5 +159,5 @@ function hookLockStat(workDir, { before = () => {}, after = () => {} }) {
 
 module.exports = {
   makeWorkDir, lockDir, stateFile, latestFile, readState, writeState, writeRawState, plantLock, plantEmptyLock, lockIdentity,
-  waitFor, track, hookLockStat, patchFs, fsError, lookup, sleep,
+  waitFor, track, hookLockStat, hookFs, throws, passThrough, fsError, lookup, sleep,
 };

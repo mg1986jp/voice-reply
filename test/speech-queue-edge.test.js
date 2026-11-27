@@ -1,6 +1,8 @@
 /**
  * SpeechQueue のテスト: ファイル操作の失敗や行き違いなど、まれな道筋（fs の関数を一時的に差し替えて起こす）
  *   node --test test/*.test.js
+ *
+ * 差し替えは h.hookFs() に「パス → 何回目の呼び出しで何をするか」の表で渡す。差し替えたら、すぐに t.after() で元に戻す予約をする。
  */
 'use strict';
 
@@ -13,20 +15,14 @@ const h = require('./helpers');
 
 test('ロックを取った直後に state を書けなかったら、ロックを返して試し直す', async (t) => {
   const workDir = h.makeWorkDir(t);
-  let failures = 0;
-  const restore = h.patchFs('renameSync', (real, [from, to]) => {
-    if (to === h.stateFile(workDir) && failures < 1) {
-      failures += 1;
-      throw h.fsError('EBUSY');
-    }
-    return real(from, to);
-  });
+  // state への置き換え（renameSync の 2 番目の引数）の 1 回目だけ失敗させる
+  const restore = h.hookFs('renameSync', { [h.stateFile(workDir)]: { 1: h.throws('EBUSY') } }, { argIndex: 1 });
   t.after(restore);
 
   const queue = new SpeechQueue('tab-A', workDir);
   assert.equal(await queue.acquire(), true);
   restore();
-  assert.equal(failures, 1);
+  assert.equal(restore.counts[h.stateFile(workDir)], 2, '1 回失敗して、2 回目で書けた');
   assert.equal(h.readState(workDir).session, 'tab-A');
   assert.deepEqual(fs.readdirSync(workDir).filter((n) => n.startsWith('state.tmp.')), [], '書きかけが残らない');
   queue.release();
@@ -34,10 +30,7 @@ test('ロックを取った直後に state を書けなかったら、ロック�
 
 test('state を書けないことが続いたら、試し直しの上限であきらめ、ロックを残さない', async (t) => {
   const workDir = h.makeWorkDir(t);
-  const restore = h.patchFs('renameSync', (real, [from, to]) => {
-    if (to === h.stateFile(workDir)) throw h.fsError('EBUSY');
-    return real(from, to);
-  });
+  const restore = h.hookFs('renameSync', { [h.stateFile(workDir)]: { other: h.throws('EBUSY') } }, { argIndex: 1 });
   t.after(restore);
 
   assert.equal(await new SpeechQueue('tab-A', workDir).acquire(), false);
@@ -47,13 +40,12 @@ test('state を書けないことが続いたら、試し直しの上限であ�
 
 test('ロックを取った直後に、同じタブの新しい要求が来ていたら、ロックを譲って読まずに終わる', async (t) => {
   const workDir = h.makeWorkDir(t);
-  const restore = h.patchFs('mkdirSync', (real, args) => {
+  const takeThenNewerArrives = (real, args) => {
     const result = real(...args);
-    if (args[0] === h.lockDir(workDir)) {
-      fs.writeFileSync(h.latestFile(workDir, 'tab-A'), 'a-newer-request'); // 取った直後に新しい要求が書いた
-    }
+    fs.writeFileSync(h.latestFile(workDir, 'tab-A'), 'a-newer-request'); // 取った直後に新しい要求が書いた
     return result;
-  });
+  };
+  const restore = h.hookFs('mkdirSync', { [h.lockDir(workDir)]: { 1: takeThenNewerArrives } });
   t.after(restore);
 
   assert.equal(await new SpeechQueue('tab-A', workDir).acquire(), false);
@@ -103,10 +95,7 @@ test('state が一時的に読めない間は、持ち主はロックを失っ�
   const reasons = [];
   try {
     reader.startWatching((reason) => reasons.push(reason));
-    const restore = h.patchFs('readFileSync', (real, args) => {
-      if (args[0] === h.stateFile(workDir)) throw h.fsError('EBUSY');
-      return real(...args);
-    });
+    const restore = h.hookFs('readFileSync', { [h.stateFile(workDir)]: { other: h.throws('EBUSY') } });
     t.after(restore);
     await h.sleep(1200);
     restore();
@@ -126,10 +115,7 @@ test('ロックを返すときに state が一時的に読めず、持ち主か�
   assert.equal(await reader.acquire(), true);
   const owned = h.readState(workDir);
 
-  const restore = h.patchFs('readFileSync', (real, args) => {
-    if (args[0] === h.stateFile(workDir)) throw h.fsError('EBUSY');
-    return real(...args);
-  });
+  const restore = h.hookFs('readFileSync', { [h.stateFile(workDir)]: { other: h.throws('EBUSY') } });
   t.after(restore);
   reader.release();
   restore();
@@ -141,10 +127,7 @@ test('ロックを返すときに state が一時的に読めず、持ち主か�
 test('合図の古いロックでも、state が一時的に読めない間は片付けず、読めるようになってから片付ける', async (t) => {
   const workDir = h.makeWorkDir(t);
   h.plantLock(workDir, { requestId: 'dead-owner', session: 'tab-X', beatAt: Date.now() - 3500 });
-  const restore = h.patchFs('readFileSync', (real, args) => {
-    if (args[0] === h.stateFile(workDir)) throw h.fsError('EBUSY');
-    return real(...args);
-  });
+  const restore = h.hookFs('readFileSync', { [h.stateFile(workDir)]: { other: h.throws('EBUSY') } });
   t.after(restore);
 
   const queue = h.track(new SpeechQueue('tab-B', workDir).acquire());
@@ -159,33 +142,27 @@ test('合図の古いロックでも、state が一時的に読めない間は�
 test('ロックのフォルダを一時的に調べられない間は片付けず、調べられるようになってから片付ける', async (t) => {
   const workDir = h.makeWorkDir(t);
   h.plantLock(workDir, { requestId: 'dead-owner', session: 'tab-X', beatAt: Date.now() - 3500 });
-  let blocking = true;
-  const restore = h.hookLockStat(workDir, {
-    before() {
-      if (blocking) throw h.fsError('EPERM');
-    },
-  });
+  const restore = h.hookFs('statSync', { [h.lockDir(workDir)]: { other: h.throws('EPERM') } });
   t.after(restore);
 
   const queue = h.track(new SpeechQueue('tab-B', workDir).acquire());
   await h.sleep(600);
   assert.equal(queue.settled, false);
   assert.equal(h.readState(workDir).requestId, 'dead-owner');
-  blocking = false;
-  assert.equal(await queue.promise, true);
   restore();
+  assert.equal(await queue.promise, true);
 });
 
 test('合図が古いと判定したあと、消す直前にロックがなくなっていたら、何も消さずに取り直す', async (t) => {
   const workDir = h.makeWorkDir(t);
   h.plantLock(workDir, { requestId: 'dead-owner', session: 'tab-X', beatAt: Date.now() - 3500 });
-  const restore = h.hookLockStat(workDir, {
-    before(count) {
-      if (count !== 2) return;
-      fs.rmSync(h.stateFile(workDir)); // 別のタブが先に片付けた
-      fs.rmdirSync(h.lockDir(workDir));
-    },
-  });
+  // 1 回目: 様子を調べる（合図が古い） / 2 回目: 消す直前の読み直し。その前に、別のタブが先に片付けたことにする
+  const anotherTabCleanedUp = (real, args) => {
+    fs.rmSync(h.stateFile(workDir));
+    fs.rmdirSync(h.lockDir(workDir));
+    return real(...args);
+  };
+  const restore = h.hookFs('statSync', { [h.lockDir(workDir)]: { 2: anotherTabCleanedUp } });
   t.after(restore);
 
   const queue = new SpeechQueue('tab-B', workDir);
@@ -198,13 +175,13 @@ test('合図が古いと判定したあと、消す直前にロックがなく�
 test('ロックを取ろうとして調べる前に返されていたら、すぐに取り直す', async (t) => {
   const workDir = h.makeWorkDir(t);
   h.plantLock(workDir, { requestId: 'other-tab', session: 'tab-X', beatAt: Date.now() });
-  const restore = h.hookLockStat(workDir, {
-    before(count) {
-      if (count !== 1) return;
-      fs.rmSync(h.stateFile(workDir)); // mkdir で EEXIST になったあと、調べる前に持ち主が返した
-      fs.rmdirSync(h.lockDir(workDir));
-    },
-  });
+  // 1 回目の様子を調べる前に（mkdir で EEXIST になったあと）、持ち主が返したことにする
+  const ownerReturned = (real, args) => {
+    fs.rmSync(h.stateFile(workDir));
+    fs.rmdirSync(h.lockDir(workDir));
+    return real(...args);
+  };
+  const restore = h.hookFs('statSync', { [h.lockDir(workDir)]: { 1: ownerReturned } });
   t.after(restore);
 
   const queue = new SpeechQueue('tab-B', workDir);
@@ -227,19 +204,13 @@ test('片付けで作業フォルダの一覧を読めないときや、ファ�
   const old = (Date.now() - 25 * 60 * 60 * 1000) / 1000;
   fs.utimesSync(oldFile, old, old);
 
-  // 差し替えは登録した直後に元に戻す予約をする（アサーションが失敗しても、差し替えが残らないように）
-  const restoreReaddir = h.patchFs('readdirSync', () => {
-    throw h.fsError('EACCES');
-  });
+  const restoreReaddir = h.hookFs('readdirSync', { [workDir]: { other: h.throws('EACCES') } });
   t.after(restoreReaddir);
   assert.doesNotThrow(() => queue.cleanupTempFiles());
   restoreReaddir();
   assert.equal(fs.existsSync(oldFile), true);
 
-  const restoreStat = h.patchFs('statSync', (real, args) => {
-    if (args[0] === oldFile) throw h.fsError('EPERM');
-    return real(...args);
-  });
+  const restoreStat = h.hookFs('statSync', { [oldFile]: { other: h.throws('EPERM') } });
   t.after(restoreStat);
   assert.doesNotThrow(() => queue.cleanupTempFiles());
   restoreStat();
