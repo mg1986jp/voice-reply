@@ -15,26 +15,30 @@ test('同じタブの新しい要求が来ると、読んでいる本人が自�
   const workDir = h.makeWorkDir(t);
   const reader = new SpeechQueue('tab-A', workDir);
   assert.equal(await reader.acquire(), true);
-  const readerRequest = h.readState(workDir).requestId;
-
-  const reasons = [];
-  // 声を止めると読み上げが終わり、release() が呼ばれる流れをまねる
-  reader.startWatching((reason) => {
-    reasons.push(reason);
-    setImmediate(() => reader.release());
-  });
-
   const newer = new SpeechQueue('tab-A', workDir);
-  const started = Date.now();
-  assert.equal(await newer.acquire(), true);
-  const elapsed = Date.now() - started;
+  // アサーションが失敗しても、見張りを止めてロックを返してから終わる（作業フォルダを消す前に）
+  try {
+    const readerRequest = h.readState(workDir).requestId;
+    const reasons = [];
+    // 声を止めると読み上げが終わり、release() が呼ばれる流れをまねる
+    reader.startWatching((reason) => {
+      reasons.push(reason);
+      setImmediate(() => reader.release());
+    });
 
-  assert.deepEqual(reasons, ['replaced']);
-  assert.ok(elapsed < 1000, `差し替えに ${elapsed}ms かかった`);
-  const state = h.readState(workDir);
-  assert.equal(state.session, 'tab-A');
-  assert.notEqual(state.requestId, readerRequest);
-  newer.release();
+    const started = Date.now();
+    assert.equal(await newer.acquire(), true);
+    const elapsed = Date.now() - started;
+
+    assert.deepEqual(reasons, ['replaced']);
+    assert.ok(elapsed < 1000, `差し替えに ${elapsed}ms かかった`);
+    const state = h.readState(workDir);
+    assert.equal(state.session, 'tab-A');
+    assert.notEqual(state.requestId, readerRequest);
+  } finally {
+    reader.release();
+    newer.release();
+  }
   assert.equal(fs.existsSync(h.lockDir(workDir)), false);
 });
 
@@ -42,31 +46,44 @@ test('別のタブは、ロックが返されるまで順番を待ち、返さ�
   const workDir = h.makeWorkDir(t);
   const reader = new SpeechQueue('tab-A', workDir);
   assert.equal(await reader.acquire(), true);
-  reader.startWatching(() => assert.fail('別のタブの要求で止めてはいけない'));
+  const otherQueue = new SpeechQueue('tab-B', workDir);
+  const other = h.track(otherQueue.acquire());
+  // アサーションが失敗しても、見張りを止め、待っている取得を回収してから終わる（作業フォルダを消す前に）
+  try {
+    reader.startWatching(() => assert.fail('別のタブの要求で止めてはいけない'));
+    await h.sleep(800);
+    assert.equal(other.settled, false, '持ち主が読んでいる間は待つ');
+    assert.equal(h.readState(workDir).session, 'tab-A');
 
-  const other = h.track(new SpeechQueue('tab-B', workDir).acquire());
-  await h.sleep(800);
-  assert.equal(other.settled, false, '持ち主が読んでいる間は待つ');
-  assert.equal(h.readState(workDir).session, 'tab-A');
-
-  const releasedAt = Date.now();
-  reader.release();
-  assert.equal(await other.promise, true);
-  const gap = Date.now() - releasedAt;
-  assert.ok(gap < 400, `ロックが返されてから取るまでに ${gap}ms かかった`);
-  assert.equal(h.readState(workDir).session, 'tab-B');
+    const releasedAt = Date.now();
+    reader.release();
+    assert.equal(await other.promise, true);
+    const gap = Date.now() - releasedAt;
+    assert.ok(gap < 400, `ロックが返されてから取るまでに ${gap}ms かかった`);
+    assert.equal(h.readState(workDir).session, 'tab-B');
+  } finally {
+    reader.release();
+    try {
+      await other.promise;
+    } finally {
+      otherQueue.release();
+    }
+  }
 });
 
 test('読んでいる間は、0.5 秒ごとに合図（beatAt）を書き直す', async (t) => {
   const workDir = h.makeWorkDir(t);
   const reader = new SpeechQueue('tab-A', workDir);
   assert.equal(await reader.acquire(), true);
-  t.after(() => reader.release());
-  reader.startWatching(() => {});
-  const first = h.readState(workDir).beatAt;
-  await h.sleep(1300);
-  const later = h.readState(workDir).beatAt;
-  assert.ok(later - first >= 900, `合図が ${later - first}ms しか進んでいない`);
+  try {
+    reader.startWatching(() => {});
+    const first = h.readState(workDir).beatAt;
+    await h.sleep(1300);
+    const later = h.readState(workDir).beatAt;
+    assert.ok(later - first >= 900, `合図が ${later - first}ms しか進んでいない`);
+  } finally {
+    reader.release();
+  }
 });
 
 test('合図が 3 秒より古いロックは、持ち主がいないものとして片付けて取る', async (t) => {
@@ -85,15 +102,16 @@ test('合図を書いているときに、ロックがほかの要求のもの�
   const reader = new SpeechQueue('tab-A', workDir);
   assert.equal(await reader.acquire(), true);
   const reasons = [];
-  reader.startWatching((reason) => reasons.push(reason));
-
   // 合図が途切れた間に片付けられ、ほかのタブに取られたことにする
   const taken = { requestId: 'other-tab-request', session: 'tab-B', beatAt: Date.now() };
-  h.writeState(workDir, taken);
-  await h.waitFor(() => reasons.length > 0, 1500, '取られたことに気づく');
-  assert.deepEqual(reasons, ['lost']);
-
-  reader.release();
+  try {
+    reader.startWatching((reason) => reasons.push(reason));
+    h.writeState(workDir, taken);
+    await h.waitFor(() => reasons.length > 0, 1500, '取られたことに気づく');
+    assert.deepEqual(reasons, ['lost']);
+  } finally {
+    reader.release();
+  }
   assert.equal(fs.existsSync(h.lockDir(workDir)), true, '相手のロックを消してはいけない');
   assert.deepEqual(h.readState(workDir), taken, '相手の state を書き換えてはいけない');
 });
@@ -103,14 +121,15 @@ test('合図を書いているときに、state がなくなっていたら、�
   const reader = new SpeechQueue('tab-A', workDir);
   assert.equal(await reader.acquire(), true);
   const reasons = [];
-  reader.startWatching((reason) => reasons.push(reason));
-
-  // 片付けられたあと、ほかのタブがロックを取り直して、まだ state を書いていないところ
-  fs.rmSync(h.stateFile(workDir));
-  await h.waitFor(() => reasons.length > 0, 1500, 'state がなくなったことに気づく');
-  assert.deepEqual(reasons, ['lost']);
-
-  reader.release();
+  try {
+    reader.startWatching((reason) => reasons.push(reason));
+    // 片付けられたあと、ほかのタブがロックを取り直して、まだ state を書いていないところ
+    fs.rmSync(h.stateFile(workDir));
+    await h.waitFor(() => reasons.length > 0, 1500, 'state がなくなったことに気づく');
+    assert.deepEqual(reasons, ['lost']);
+  } finally {
+    reader.release();
+  }
   assert.equal(fs.existsSync(h.lockDir(workDir)), true, 'ほかのタブのロックかもしれないので消さない');
   assert.equal(fs.existsSync(h.stateFile(workDir)), false);
 });

@@ -45,19 +45,23 @@ test('同じタブの持ち主が、声を止められずに合図を書き続�
   const workDir = h.makeWorkDir(t);
   const reader = new SpeechQueue('tab-A', workDir);
   assert.equal(await reader.acquire(), true);
-  t.after(() => reader.release());
-  const reasons = [];
-  reader.startWatching((reason) => reasons.push(reason)); // 声を止められず、ロックを返さないことにする
-  const readerRequest = h.readState(workDir).requestId;
+  // アサーションが失敗しても、見張りを止めてロックを返してから終わる（作業フォルダを消す前に）
+  try {
+    const reasons = [];
+    reader.startWatching((reason) => reasons.push(reason)); // 声を止められず、ロックを返さないことにする
+    const readerRequest = h.readState(workDir).requestId;
 
-  const newer = new SpeechQueue('tab-A', workDir);
-  const started = Date.now();
-  assert.equal(await newer.acquire(), false);
-  const elapsed = Date.now() - started;
+    const newer = new SpeechQueue('tab-A', workDir);
+    const started = Date.now();
+    assert.equal(await newer.acquire(), false);
+    const elapsed = Date.now() - started;
 
-  assert.deepEqual(reasons, ['replaced']);
-  assert.ok(elapsed >= 4900 && elapsed < 5800, `${elapsed}ms であきらめた`);
-  const state = h.readState(workDir);
-  assert.equal(state.requestId, readerRequest, '持ち主のロックのまま');
-  assert.ok(Date.now() - state.beatAt < 1000, '差し替えに気づいたあとも合図を書き続けている');
+    assert.deepEqual(reasons, ['replaced']);
+    assert.ok(elapsed >= 4900 && elapsed < 5800, `${elapsed}ms であきらめた`);
+    const state = h.readState(workDir);
+    assert.equal(state.requestId, readerRequest, '持ち主のロックのまま');
+    assert.ok(Date.now() - state.beatAt < 1000, '差し替えに気づいたあとも合図を書き続けている');
+  } finally {
+    reader.release();
+  }
 });

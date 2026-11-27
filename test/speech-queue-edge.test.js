@@ -85,11 +85,14 @@ test('state が古い版の形式（PID:セッション）に書き換わって�
   const reader = new SpeechQueue('tab-A', workDir);
   assert.equal(await reader.acquire(), true);
   const reasons = [];
-  reader.startWatching((reason) => reasons.push(reason));
-  h.writeState(workDir, '1234:tab-A');
-  await h.waitFor(() => reasons.length > 0, 1500, '気づく');
-  assert.deepEqual(reasons, ['lost']);
-  reader.release();
+  try {
+    reader.startWatching((reason) => reasons.push(reason));
+    h.writeState(workDir, '1234:tab-A');
+    await h.waitFor(() => reasons.length > 0, 1500, '気づく');
+    assert.deepEqual(reasons, ['lost']);
+  } finally {
+    reader.release();
+  }
   assert.equal(fs.existsSync(h.lockDir(workDir)), true, 'ロックには触らない');
 });
 
@@ -97,22 +100,24 @@ test('state が一時的に読めない間は、持ち主はロックを失っ�
   const workDir = h.makeWorkDir(t);
   const reader = new SpeechQueue('tab-A', workDir);
   assert.equal(await reader.acquire(), true);
-  t.after(() => reader.release());
   const reasons = [];
-  reader.startWatching((reason) => reasons.push(reason));
-
-  const restore = h.patchFs('readFileSync', (real, args) => {
-    if (args[0] === h.stateFile(workDir)) throw h.fsError('EBUSY');
-    return real(...args);
-  });
-  t.after(restore);
-  await h.sleep(1200);
-  restore();
-  assert.deepEqual(reasons, []);
-  const before = h.readState(workDir).beatAt;
-  await h.sleep(800);
-  assert.ok(h.readState(workDir).beatAt > before, '合図の書き直しが戻る');
-  assert.deepEqual(reasons, []);
+  try {
+    reader.startWatching((reason) => reasons.push(reason));
+    const restore = h.patchFs('readFileSync', (real, args) => {
+      if (args[0] === h.stateFile(workDir)) throw h.fsError('EBUSY');
+      return real(...args);
+    });
+    t.after(restore);
+    await h.sleep(1200);
+    restore();
+    assert.deepEqual(reasons, []);
+    const before = h.readState(workDir).beatAt;
+    await h.sleep(800);
+    assert.ok(h.readState(workDir).beatAt > before, '合図の書き直しが戻る');
+    assert.deepEqual(reasons, []);
+  } finally {
+    reader.release();
+  }
 });
 
 test('ロックを返すときに state が一時的に読めず、持ち主か確かめられないときは、ロックに触らない', async (t) => {
