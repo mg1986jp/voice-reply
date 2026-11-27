@@ -20,6 +20,7 @@ const realFs = {
   renameSync: fs.renameSync,
   mkdirSync: fs.mkdirSync,
   readdirSync: fs.readdirSync,
+  rmSync: fs.rmSync,
 };
 const realStatSync = realFs.statSync;
 
