@@ -19,7 +19,7 @@ Claude Code の返事を声で読み上げるプラグインです。OS 標準�
 | Claude Code | v2.1.332 で動作を確認しています |
 | Node.js | 18 以上（Node に標準で入っている `fetch` を使うため）。`node` コマンドが PATH から使えること。npm パッケージは使いません |
 | Mac の声 | `say` コマンド（macOS に標準で入っています）と、日本語の声「Kyoko」。Kyoko が入っていないときは、システム設定の「アクセシビリティ」→「読み上げコンテンツ」で追加するか、`VOICE_REPLY_MAC_VOICE` で入っている声を指定してください |
-| Windows の声 | Windows PowerShell 5.1（Windows に標準で入っています）と、日本語の声「Microsoft Haruka Desktop」。Haruka が入っていないときは、入っている日本語の女性の声、なければ日本語の声に自動で切り替えます |
+| Windows の声 | Windows PowerShell 5.1（Windows に標準で入っています）と、日本語の声「Microsoft Haruka Desktop」。Haruka が入っていないときは、入っている日本語の女性の声、なければ日本語の声に自動で切り替えます。`VOICE_REPLY_WIN_VOICE` で、入っているほかの声を指定することもできます |
 | AivisSpeech の声（使うときだけ） | AivisSpeech Engine を自分で起動しておくこと（「AivisSpeech の声で読む」を参照）。音は、Mac は `afplay`、Windows は Windows PowerShell 5.1 で鳴らします（どちらも OS に標準で入っています） |
 
 Mac と Windows 以外の OS では、読み上げは動きません。要約の指示も渡さず、何もせずに終わります。
@@ -148,9 +148,10 @@ ACML の禁止事項の要点です。正確な内容は条文（https://github.
 | `VOICE_REPLY_AIVIS_STYLE` | AivisSpeech | 声のスタイル ID（整数）。下の表か、エンジンの `GET /speakers` で確かめます | `888753760`（まお／ノーマル） |
 | `VOICE_REPLY_AIVIS_SPEED` | AivisSpeech | 速さ（speedScale）。`0.5`〜`2.0` の数。`1.0` がモデルの標準の速さです | `1.4` |
 | `VOICE_REPLY_AIVIS_URL` | AivisSpeech | エンジンの URL。エンジンを `--port` でほかのポートにしたときに変えます | `http://127.0.0.1:10101` |
+| `VOICE_REPLY_MAC_VOICE` | Mac の声 | 声の名前 | `Kyoko` |
 | `VOICE_REPLY_MAC_RATE` | Mac の声 | 速さ。`say -r` に渡す値（1分あたりの語数）で、正の整数 | `260` |
+| `VOICE_REPLY_WIN_VOICE` | Windows の声 | 声の名前。入っていなければ、入っている日本語の女性の声、なければ日本語の声に切り替えます | `Microsoft Haruka Desktop` |
 | `VOICE_REPLY_WIN_RATE` | Windows の声 | 速さ。System.Speech の Rate で、`-10`〜`10` の整数。`0` が標準の速さで、1増えるごとに約1.12倍になります | `3`（標準の約1.4倍） |
-| `VOICE_REPLY_MAC_VOICE` | Mac・Windows の声 | 声の名前。名前に MAC と付いていますが、Windows の声の名前もこれで指定します | Mac は `Kyoko`、Windows は `Microsoft Haruka Desktop` |
 
 初期の声のスタイル ID です（エンジンを初めて起動したときに入る声）。
 
@@ -169,11 +170,11 @@ ACML の禁止事項の要点です。正確な内容は条文（https://github.
 
 | 古い名前（0.1.x） | 新しい名前（0.2.0 から） |
 | :- | :- |
-| `CLAUDE_SAY_VOICE` | `VOICE_REPLY_MAC_VOICE` |
+| `CLAUDE_SAY_VOICE` | Mac なら `VOICE_REPLY_MAC_VOICE`、Windows なら `VOICE_REPLY_WIN_VOICE`（古い名前は Mac と Windows で共通でしたが、新しい名前は OS ごとに分かれています） |
 | `CLAUDE_SAY_RATE` | `VOICE_REPLY_MAC_RATE` |
 | `CLAUDE_SAY_WIN_RATE` | `VOICE_REPLY_WIN_RATE` |
 
-1. `~/.claude/settings.json` の `env` で、古い名前を新しい名前に書き換えます。値はそのまま使えます。シェルの設定ファイルなど、ほかの場所で環境変数を設定しているときは、そちらも書き換えます
+1. `~/.claude/settings.json` の `env` で、古い名前を新しい名前に書き換えます。値はそのまま使えます。Mac と Windows の両方で同じ `settings.json` を使っていて `CLAUDE_SAY_VOICE` を書いていたときは、`VOICE_REPLY_MAC_VOICE` と `VOICE_REPLY_WIN_VOICE` に、それぞれの OS の声の名前を書きます。シェルの設定ファイルなど、ほかの場所で環境変数を設定しているときは、そちらも書き換えます
 2. Claude Code を起動し直します
 
 - **実行結果**：0.1.x のときと同じ声と速さで読みます
@@ -214,7 +215,7 @@ ACML の禁止事項の要点です。正確な内容は条文（https://github.
 | 0.2.0 にしたら、声や速さの設定が効かない | 環境変数の名前が変わりました。「古い名前からの切り替え」のとおりに書き換えます |
 | AivisSpeech Engine を起動しているのに、OS の声で読む | ブラウザで `http://127.0.0.1:10101/version` を開き、エンジンの版が表示されるかを確かめます。表示されないときは、エンジンがまだ起動の途中か（初めての起動では数分かかります）、ほかのポートで動いています。ほかのポートのときは `VOICE_REPLY_AIVIS_URL` を合わせます。`VOICE_REPLY_ENGINE` が `os` になっていないかも確かめます |
 | AivisSpeech の声が途中で止まる | エンジンが途中で失敗すると、そこで読むのをやめます。エンジンのログ（「エンジンのデータと、読んだ文章の記録」を参照）にエラーが出ていないかを確かめます。時間の上限を超えたときも止まります |
-| 長い読み上げが途中で止まる | 読み上げの時間の上限（「読み上げの時間の上限」を参照）を超えると止まります。`VOICE_REPLY_MAC_VOICE` や `VOICE_REPLY_AIVIS_STYLE` でほかの声にしているときや、Windows で Haruka が入っておらずほかの声に切り替わっているときは、見積もりより遅く読んで上限に届くことがあります。初期の声に戻すと直ることがあります |
+| 長い読み上げが途中で止まる | 読み上げの時間の上限（「読み上げの時間の上限」を参照）を超えると止まります。`VOICE_REPLY_MAC_VOICE`・`VOICE_REPLY_WIN_VOICE`・`VOICE_REPLY_AIVIS_STYLE` でほかの声にしているときや、Windows で Haruka が入っておらずほかの声に切り替わっているときは、見積もりより遅く読んで上限に届くことがあります。初期の声に戻すと直ることがあります |
 
 原因を調べるときは、`claude --debug` で起動します。debug ログで `voice-reply` を含む行を見ると、どのフックが動いたかが分かります。
 

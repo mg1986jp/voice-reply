@@ -2,8 +2,7 @@
  * 声: Windows の SAPI の声（Windows PowerShell 5.1 の System.Speech で読む）
  *
  * 設定（環境変数）:
- *   VOICE_REPLY_MAC_VOICE  声の名前（初期値: Microsoft Haruka Desktop）。名前は Mac 用だが、Windows の声の名前もこれで指定する
- *                          （元の CLAUDE_SAY_VOICE が Mac と Windows で共通だったため）
+ *   VOICE_REPLY_WIN_VOICE  声の名前（初期値: Microsoft Haruka Desktop）
  *                          指定した声が入っていなければ、日本語の声に切り替える
  *   VOICE_REPLY_WIN_RATE   速さ（System.Speech の Rate。-10〜10 の整数、初期値 3 ≒ 標準の約1.4倍）
  */
@@ -108,7 +107,7 @@ class WindowsSapi {
 
 /** 環境変数の設定から作る */
 function create(env) {
-  return new WindowsSapi(env.VOICE_REPLY_MAC_VOICE || DEFAULT_VOICE, parseRate(env.VOICE_REPLY_WIN_RATE));
+  return new WindowsSapi(env.VOICE_REPLY_WIN_VOICE || DEFAULT_VOICE, parseRate(env.VOICE_REPLY_WIN_RATE));
 }
 
 module.exports = { create };
