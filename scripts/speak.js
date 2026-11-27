@@ -8,13 +8,13 @@
  * なければ全文から Markdown を除去して読む。
  *
  * 排他制御:
- *   同じタブ（同一セッション）→ 前の読み上げを止めて新しい方に差し替え
+ *   同じタブ（同一セッション）→ 読んでいる本人が新しい返事に気づいて自分の声を止め、新しい方に差し替え
  *   別のタブ（別セッション）→ 順番待ち
- *   手動の say は一切触らない
+ *   ほかのプロセスは止めない（手動の say なども一切触らない）
  *
  * 構成:
  *   lib/text.js          読む文章を作る（OS 非依存）
- *   lib/speech-queue.js  mkdir ベースの排他制御（OS 非依存。前の読み上げの止め方だけ OS ごとに違う）
+ *   lib/speech-queue.js  mkdir ベースの排他制御（OS 非依存）
  *   voices/              声ごとの読み上げ処理と、OS に合う声の選択
  *
  * 読み上げがオフ（/voice-reply:toggle off）のときは、何もせずにすぐ終わる。
@@ -81,6 +81,8 @@ async function main() {
     // 順番待ちのあいだにオフにされていたら、読まずに終わる（ロックは finally で返す）。
     // 読み始めたあとにオフにされた場合は、確かめ直さずに最後まで読む
     if (!isEnabled(dataDir)) return;
+    // 同じタブの新しい返事が来たら、自分の声だけを止める（声が止まると読み上げが終わり、finally でロックを返す）
+    queue.startWatching(() => voice.kill());
     await voice.speak(speechText);
   } finally {
     queue.release();

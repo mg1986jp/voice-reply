@@ -12,6 +12,4 @@ const WIN_SYSTEM32 = path.join(process.env.SystemRoot || 'C:\\Windows', 'System3
 
 module.exports = {
   WIN_POWERSHELL: path.join(WIN_SYSTEM32, 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
-  WIN_TASKKILL: path.join(WIN_SYSTEM32, 'taskkill.exe'),
-  WIN_TASKLIST: path.join(WIN_SYSTEM32, 'tasklist.exe'),
 };
