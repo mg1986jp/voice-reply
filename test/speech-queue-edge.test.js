@@ -97,12 +97,12 @@ test('state が一時的に読めない間は、持ち主はロックを失っ�
     reader.startWatching((reason) => reasons.push(reason));
     const restore = h.hookFs('readFileSync', { [h.stateFile(workDir)]: { other: h.throws('EBUSY') } });
     t.after(restore);
-    await h.sleep(1200);
+    // 合図を書く前の確かめで、state の読み取りに実際に失敗するまで待つ（失敗させた呼び出しの回数で確かめる）
+    await h.waitFor(() => h.lookup(restore.counts, h.stateFile(workDir), 0) > 0, 1500, '監視が state の読み取りに失敗する');
     restore();
     assert.deepEqual(reasons, []);
     const before = h.readState(workDir).beatAt;
-    await h.sleep(800);
-    assert.ok(h.readState(workDir).beatAt > before, '合図の書き直しが戻る');
+    await h.waitFor(() => h.readState(workDir).beatAt > before, 1500, '合図の書き直しが戻る');
     assert.deepEqual(reasons, []);
   } finally {
     reader.release();
