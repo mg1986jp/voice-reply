@@ -1,0 +1,15 @@
+{
+  "name": "mg1986jp",
+  "description": "mg1986jp のプラグインを配るマーケットプレイス",
+  "owner": {
+    "name": "mg1986jp",
+    "url": "https://github.com/mg1986jp"
+  },
+  "plugins": [
+    {
+      "name": "voice-reply",
+      "source": "./",
+      "description": "Claude Code の返事を OS 標準の声で読み上げる（Mac は say、Windows は SAPI）"
+    }
+  ]
+}

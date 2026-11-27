@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!--
+    voice-reply のアイコン: ターミナルのプロンプト「>」から、声の波が2本出ている
+    書き出し: 1024x1024 の PNG（.claude-plugin/icon.png）。背景は角を丸めない正方形
+
+    位置合わせ（線の端の丸みも含めた外枠）:
+      左端  184     「>」の端の丸み（236 - 線の太さの半分 52）
+      右端  821.94  外側の弧のふくらみ（中心 463.94 + 半径 314 + 線の太さの半分 44）
+      上端  246 / 下端 778  外側の弧の端の丸み（290 - 44 / 734 + 44）
+    左右の真ん中が 502.97 なので、右に 9.03 ずらして 512 に合わせている。上下の真ん中はもとから 512
+  -->
+  <rect width="1024" height="1024" fill="#0b0f0e"/>
+  <g transform="translate(9.03 0)" fill="none" stroke="#22d3ee" stroke-linecap="round" stroke-linejoin="round">
+    <polyline points="236,328 420,512 236,696" stroke-width="104"/>
+    <path d="M 574 400 A 158 158 0 0 1 574 624" stroke-width="88"/>
+    <path d="M 686 290 A 314 314 0 0 1 686 734" stroke-width="88"/>
+  </g>
+</svg>
