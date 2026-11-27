@@ -138,16 +138,15 @@ test('合図が古いと判定したあと、消す直前に state がなくな�
   const workDir = h.makeWorkDir(t);
   h.plantLock(workDir, { requestId: 'dead-owner', session: 'tab-X', beatAt: Date.now() - 3500 });
   let recreated = null;
-  // 1回目: 様子を調べる（合図が古い） / 2回目: 消す直前の読み直し。その直前に、ほかのタブが片付けて取り直したことにする
-  const restore = h.hookLockStat(workDir, {
-    before(count) {
-      if (count !== 2) return;
-      fs.rmSync(h.stateFile(workDir));
-      fs.rmdirSync(h.lockDir(workDir));
-      fs.mkdirSync(h.lockDir(workDir));
-      recreated = h.lockIdentity(workDir);
-    },
-  });
+  // 1 回目: 様子を調べる（合図が古い） / 2 回目: 消す直前の読み直し。その前に、ほかのタブが片付けて取り直し、まだ state を書いていないことにする
+  const anotherTabRetook = (real, args) => {
+    fs.rmSync(h.stateFile(workDir));
+    fs.rmdirSync(h.lockDir(workDir));
+    fs.mkdirSync(h.lockDir(workDir));
+    recreated = h.lockIdentity(workDir);
+    return real(...args);
+  };
+  const restore = h.hookFs('statSync', { [h.lockDir(workDir)]: { 2: anotherTabRetook } });
   t.after(restore);
 
   const queue = h.track(new SpeechQueue('tab-B', workDir).acquire());
@@ -165,13 +164,13 @@ test('合図が古いと判定したあと、消す直前に合図が新しく�
   const workDir = h.makeWorkDir(t);
   h.plantLock(workDir, { requestId: 'sleeping-owner', session: 'tab-X', beatAt: Date.now() - 3500 });
   let resumed = null;
-  const restore = h.hookLockStat(workDir, {
-    before(count) {
-      if (count !== 2) return;
-      resumed = { requestId: 'sleeping-owner', session: 'tab-X', beatAt: Date.now() };
-      h.writeState(workDir, resumed);
-    },
-  });
+  // 2 回目（消す直前の読み直し）の前に、持ち主が復帰して合図を書き直したことにする
+  const ownerResumed = (real, args) => {
+    resumed = { requestId: 'sleeping-owner', session: 'tab-X', beatAt: Date.now() };
+    h.writeState(workDir, resumed);
+    return real(...args);
+  };
+  const restore = h.hookFs('statSync', { [h.lockDir(workDir)]: { 2: ownerResumed } });
   t.after(restore);
 
   const queue = h.track(new SpeechQueue('tab-B', workDir).acquire());
@@ -198,30 +197,31 @@ test('読み終わったあとも、自分のタブの latest-* は消さない�
 
 test('24 時間より古い一時ファイルを片付け、新しいものと lock・state は残す', async (t) => {
   const workDir = h.makeWorkDir(t);
-  const old = (Date.now() - 25 * 60 * 60 * 1000) / 1000;
-  const files = {
-    'latest-00000000000000aa': true, // 古い → 消す
-    'latest-00000000000000bb.1234': true, // 古い書きかけ → 消す
-    'state.tmp.99': true, // 古い書きかけ → 消す
-    'latest-00000000000000cc': false, // 新しい → 残す
-    'state': false, // 対象外 → 残す
-    'notes.txt': false, // 対象外 → 残す
-  };
-  for (const [name, isOld] of Object.entries(files)) {
+  const now = Date.now() / 1000;
+  const old = now - 25 * 60 * 60;
+  // [ファイル名, 更新時刻, 片付けのあとに残るか]
+  const cases = [
+    ['latest-00000000000000aa', old, false], // 古い latest → 消す
+    ['latest-00000000000000bb.1234', old, false], // 古い書きかけ → 消す
+    ['state.tmp.99', old, false], // 古い書きかけ → 消す
+    ['latest-00000000000000cc', now, true], // 新しい → 残す
+    ['state', old, true], // 対象外 → 古くても残す
+    ['notes.txt', old, true], // 対象外 → 古くても残す
+  ];
+  for (const [name, mtime] of cases) {
     const file = path.join(workDir, name);
     fs.writeFileSync(file, 'x');
-    if (isOld || name === 'state' || name === 'notes.txt') fs.utimesSync(file, old, old);
+    fs.utimesSync(file, mtime, mtime);
   }
   fs.mkdirSync(h.lockDir(workDir));
   fs.utimesSync(h.lockDir(workDir), old, old);
 
   new SpeechQueue('tab-A', workDir).cleanupTempFiles();
 
-  for (const [name, isOld] of Object.entries(files)) {
-    const removable = isOld && name !== 'state' && name !== 'notes.txt';
-    assert.equal(fs.existsSync(path.join(workDir, name)), !removable, name);
+  for (const [name, , kept] of cases) {
+    assert.equal(fs.existsSync(path.join(workDir, name)), kept, name);
   }
-  assert.equal(fs.existsSync(h.lockDir(workDir)), true, 'lock');
+  assert.equal(fs.existsSync(h.lockDir(workDir)), true, 'lock は古くても残す');
 });
 
 test('ロックを取るまでの間に同じタブの新しい要求に追い越されたら、読まずに終わる', async (t) => {
