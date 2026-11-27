@@ -87,7 +87,7 @@ test('state が古い版の形式（PID:セッション）に書き換わって�
   const reasons = [];
   try {
     reader.startWatching((reason) => reasons.push(reason));
-    h.writeState(workDir, '1234:tab-A');
+    h.writeRawState(workDir, '1234:tab-A');
     await h.waitFor(() => reasons.length > 0, 1500, '気づく');
     assert.deepEqual(reasons, ['lost']);
   } finally {

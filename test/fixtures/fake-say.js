@@ -8,6 +8,8 @@
  *
  * FAKE_SIGTERM_AFTER_START を付けると、読み始めてからそのミリ秒後に、プロセスに SIGTERM が届いたことにする
  * （Windows では外から送るとハンドラーが動かずに終わるため、process.emit で起こす）。
+ *
+ * 止めるのは一度だけになる（読み終わったあとや、止めたあとは、声の側の kill() が子プロセスの状態を見て呼ばない）。
  */
 'use strict';
 
@@ -22,13 +24,18 @@ const dir = process.env.FAKE_VOICE_DIR;
 const duration = Number(process.env.FAKE_VOICE_MS || 0);
 const mark = (name, content = '') => fs.writeFileSync(path.join(dir, `${process.pid}.${name}`), content);
 
+// 読み始めたあと SIGTERM を起こすかどうか（環境変数があるときだけ）
+const afterStart = {
+  true: () => setTimeout(() => process.emit('SIGTERM', 'SIGTERM'), Number(process.env.FAKE_SIGTERM_AFTER_START)),
+  false: () => {},
+}[String('FAKE_SIGTERM_AFTER_START' in process.env)];
+
 childProcess.spawn = function fakeSpawn() {
   const child = new EventEmitter();
   child.exitCode = null;
   child.signalCode = null;
   let timer = null;
   child.kill = () => {
-    if (child.exitCode !== null || child.signalCode !== null) return;
     clearTimeout(timer);
     child.signalCode = 'SIGKILL';
     mark('killed');
@@ -43,9 +50,7 @@ childProcess.spawn = function fakeSpawn() {
     final(callback) {
       mark('started', Buffer.concat(chunks).toString('utf8'));
       callback();
-      if (process.env.FAKE_SIGTERM_AFTER_START) {
-        setTimeout(() => process.emit('SIGTERM', 'SIGTERM'), Number(process.env.FAKE_SIGTERM_AFTER_START));
-      }
+      afterStart();
       timer = setTimeout(() => {
         child.exitCode = 0;
         mark('done');

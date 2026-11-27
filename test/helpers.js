@@ -1,8 +1,11 @@
 /**
  * テスト用の道具（Node の標準モジュールだけ）
+ *
+ * テストの中に分岐（if/else、三項演算子）は書かない。分岐が要るところは、表（オブジェクト）から引く形にする。
  */
 'use strict';
 
+const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -20,6 +23,11 @@ const realFs = {
 };
 const realStatSync = realFs.statSync;
 
+/** 表から key の値を引く。表にない key のときは fallback を返す */
+function lookup(table, key, fallback) {
+  return { [key]: fallback, ...table }[key];
+}
+
 /** テストごとの作業フォルダを作り、終わったら消す */
 function makeWorkDir(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'voice-reply-test-'));
@@ -36,11 +44,16 @@ function readState(workDir) {
   return JSON.parse(realFs.readFileSync(stateFile(workDir), 'utf8'));
 }
 
-/** state を書く（本物と同じく、一時ファイルに書いてから置き換える）。文字列を渡すと、そのまま書く */
-function writeState(workDir, state) {
+/** state に文字列をそのまま書く（本物と同じく、一時ファイルに書いてから置き換える） */
+function writeRawState(workDir, text) {
   const tmp = `${stateFile(workDir)}.test-tmp`;
-  realFs.writeFileSync(tmp, typeof state === 'string' ? state : JSON.stringify(state));
+  realFs.writeFileSync(tmp, text);
   realFs.renameSync(tmp, stateFile(workDir));
+}
+
+/** state を書く */
+function writeState(workDir, state) {
+  writeRawState(workDir, JSON.stringify(state));
 }
 
 /**
@@ -64,10 +77,15 @@ function fsError(code) {
   return err;
 }
 
-/** ほかのタブが持っているロックを置く。state を省くと、state のないロックになる */
-function plantLock(workDir, state) {
+/** state のないロックを置く（ロックを作ってから state を書く前に落ちた持ち主のもの、など） */
+function plantEmptyLock(workDir) {
   realFs.mkdirSync(lockDir(workDir));
-  if (state) writeState(workDir, state);
+}
+
+/** ほかのタブが持っているロックを置く */
+function plantLock(workDir, state) {
+  plantEmptyLock(workDir);
+  writeState(workDir, state);
 }
 
 /** ロックのフォルダの身元（作り直されたかを見分ける） */
@@ -76,13 +94,11 @@ function lockIdentity(workDir) {
   return `${stat.ino}:${stat.birthtimeNs}`;
 }
 
+/** condition() が true になるまで待つ。timeoutMs を過ぎても true にならなければ失敗にする */
 async function waitFor(condition, timeoutMs, label) {
   const end = Date.now() + timeoutMs;
-  while (Date.now() < end) {
-    if (condition()) return;
-    await sleep(20);
-  }
-  throw new Error(`timed out: ${label}`);
+  while (!condition() && Date.now() < end) await sleep(20);
+  assert.ok(condition(), `timed out: ${label}`);
 }
 
 /** promise がまだ終わっていないかを調べられるようにする */
@@ -100,23 +116,25 @@ function track(promise) {
  * fs.statSync を一時的に差し替える。ロックのフォルダが調べられるたびに、
  *   before(回数)        調べる直前
  *   after(回数, 結果)    調べた直後
- * を呼ぶ。返り値の関数で元に戻す。
+ * を呼ぶ。ほかのパスは本物の statSync に任せる。返り値の関数で元に戻す。
  */
 function hookLockStat(workDir, { before = () => {}, after = () => {} }) {
   let count = 0;
-  fs.statSync = function patchedStatSync(target, ...rest) {
-    if (target !== lockDir(workDir)) return realStatSync.call(this, target, ...rest);
+  const hooked = (...args) => {
     count += 1;
     before(count);
-    const result = realStatSync.call(this, target, ...rest);
+    const result = realStatSync.apply(fs, args);
     after(count, result);
     return result;
   };
+  const plain = (...args) => realStatSync.apply(fs, args);
+  fs.statSync = (...args) => lookup({ [lockDir(workDir)]: hooked }, args[0], plain)(...args);
   return () => {
     fs.statSync = realStatSync;
   };
 }
 
 module.exports = {
-  makeWorkDir, lockDir, stateFile, latestFile, readState, writeState, plantLock, lockIdentity, waitFor, track, hookLockStat, patchFs, fsError, sleep,
+  makeWorkDir, lockDir, stateFile, latestFile, readState, writeState, writeRawState, plantLock, plantEmptyLock, lockIdentity,
+  waitFor, track, hookLockStat, patchFs, fsError, lookup, sleep,
 };

@@ -12,7 +12,7 @@ const h = require('./helpers');
 
 test('state のない古いロックは、消す直前にフォルダが作り直されていたら片付けない', async (t) => {
   const workDir = h.makeWorkDir(t);
-  h.plantLock(workDir, null);
+  h.plantEmptyLock(workDir);
   let armed = false;
   let recreated = null;
   // 本物と同じ基準（フォルダの ctime から 5 秒を超えたか）で猶予切れを見分ける。猶予切れと判定される様子の次の確認が

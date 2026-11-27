@@ -32,7 +32,7 @@ test('合図が書き直され続けているロックは片付けず、合図�
 
 test('state のない古いロックは、フォルダが作り直されていなければ、5 秒の猶予のあとに片付けて取る', async (t) => {
   const workDir = h.makeWorkDir(t);
-  h.plantLock(workDir, null);
+  h.plantEmptyLock(workDir);
   const queue = new SpeechQueue('tab-B', workDir);
   const started = Date.now();
   assert.equal(await queue.acquire(), true);
