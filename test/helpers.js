@@ -1,7 +1,7 @@
 /**
  * テスト用の道具（Node の標準モジュールだけ）
  *
- * テストの中に分岐（if/else、三項演算子）は書かない。分岐が要るところは、表（オブジェクト）から引く形にする。
+ * テストの中に条件分岐の文や三項演算子は書かない。分岐が要るところは、表（オブジェクト）から引く形にする。
  */
 'use strict';
 
@@ -135,29 +135,7 @@ function track(promise) {
   return tracked;
 }
 
-/**
- * fs.statSync を一時的に差し替える。ロックのフォルダが調べられるたびに、
- *   before(回数)        調べる直前
- *   after(回数, 結果)    調べた直後
- * を呼ぶ。ほかのパスは本物の statSync に任せる。返り値の関数で元に戻す。
- */
-function hookLockStat(workDir, { before = () => {}, after = () => {} }) {
-  let count = 0;
-  const hooked = (...args) => {
-    count += 1;
-    before(count);
-    const result = realStatSync.apply(fs, args);
-    after(count, result);
-    return result;
-  };
-  const plain = (...args) => realStatSync.apply(fs, args);
-  fs.statSync = (...args) => lookup({ [lockDir(workDir)]: hooked }, args[0], plain)(...args);
-  return () => {
-    fs.statSync = realStatSync;
-  };
-}
-
 module.exports = {
   makeWorkDir, lockDir, stateFile, latestFile, readState, writeState, writeRawState, plantLock, plantEmptyLock, lockIdentity,
-  waitFor, track, hookLockStat, hookFs, throws, passThrough, fsError, lookup, sleep,
+  waitFor, track, hookFs, throws, passThrough, fsError, lookup, sleep,
 };

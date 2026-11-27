@@ -160,6 +160,33 @@ test('合図が古いと判定したあと、消す直前に state がなくな�
   assert.equal(await queue.promise, true);
 });
 
+test('state のない古いロックは、消す直前にフォルダが作り直されていたら片付けない', async (t) => {
+  const workDir = h.makeWorkDir(t);
+  h.plantEmptyLock(workDir);
+  let recreated = null;
+  // 1 回目: 様子を調べる。このときだけ、6 秒前に作られたフォルダに見せる（5 秒の猶予が切れた state のないロックと判定させる）
+  const looksSixSecondsOld = (real, args) => ({ ...real(...args), ctimeMs: BigInt(Date.now() - 6000) });
+  // 2 回目: 消す直前の読み直し。その前に、ほかのタブが片付けて取り直し、まだ state を書いていないことにする
+  const anotherTabRetook = (real, args) => {
+    fs.rmdirSync(h.lockDir(workDir));
+    fs.mkdirSync(h.lockDir(workDir));
+    recreated = h.lockIdentity(workDir);
+    return real(...args);
+  };
+  const restore = h.hookFs('statSync', { [h.lockDir(workDir)]: { 1: looksSixSecondsOld, 2: anotherTabRetook } });
+  t.after(restore);
+
+  const queue = h.track(new SpeechQueue('tab-B', workDir).acquire());
+  await h.waitFor(() => recreated !== null, 2000, '消す直前の読み直しまで進む');
+  await h.sleep(400);
+  restore();
+  assert.equal(queue.settled, false);
+  assert.equal(h.lockIdentity(workDir), recreated, '作り直されたロックを消してはいけない');
+
+  fs.rmdirSync(h.lockDir(workDir)); // 取り直したタブが返したことにして、待っている要求を終わらせる
+  assert.equal(await queue.promise, true);
+});
+
 test('合図が古いと判定したあと、消す直前に合図が新しくなっていたら（持ち主が復帰した）、そのロックは消さない', async (t) => {
   const workDir = h.makeWorkDir(t);
   h.plantLock(workDir, { requestId: 'sleeping-owner', session: 'tab-X', beatAt: Date.now() - 3500 });
