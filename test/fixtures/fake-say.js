@@ -13,7 +13,10 @@
  *   FAKE_TIME_LIMIT_MS  読み上げの時間の上限（声の速さによらず、このミリ秒にする）
  *   FAKE_STOP_GRACE_MS  声を止めてから、読み上げが終わるのを待つ上限
  *
- * FAKE_KILL_IGNORED を付けると、止めても声が終わらないことにする（止められたら <PID>.kill-ignored を書き、読み続ける）。
+ * FAKE_KILL_IGNORED を付けると、止めても声が終わらないことにする（止められたら <PID>.kill-ignored に止められた回数を書き、読み続ける）。
+ * FAKE_VOICE_WITHOUT_SPEED を付けると、速さを見積もれない声（charsPerSecond() を持たない声）にする。
+ *
+ * プロセスが終わるときに、setTimeout() で作ったタイマーの長さ（ミリ秒）を、作った順に JSON の配列で <PID>.timers に書く。
  *
  * 止めるのは一度だけになる（読み終わったあとや、止めたあとは、声の側の kill() が子プロセスの状態を見て呼ばない）。
  */
@@ -46,7 +49,17 @@ for (const [name, override] of SPEECH_LIMIT_OVERRIDES.filter(([envName]) => envN
   Object.assign(speechLimit, override(Number(process.env[name])));
 }
 
+// setTimeout() で作ったタイマーの長さを記録し、終わるときに書く（process.exit() で終わるときも書く）
+const realSetTimeout = globalThis.setTimeout;
+const timerDelays = [];
+globalThis.setTimeout = (callback, delay, ...args) => {
+  timerDelays.push(delay);
+  return realSetTimeout(callback, delay, ...args);
+};
+process.on('exit', () => mark('timers', JSON.stringify(timerDelays)));
+
 const killIgnored = String('FAKE_KILL_IGNORED' in process.env);
+let ignoredKills = 0;
 
 childProcess.spawn = function fakeSpawn() {
   const child = new EventEmitter();
@@ -59,7 +72,10 @@ childProcess.spawn = function fakeSpawn() {
     mark('killed');
     child.emit('close', null, 'SIGKILL');
   };
-  const ignore = () => mark('kill-ignored');
+  const ignore = () => {
+    ignoredKills += 1;
+    mark('kill-ignored', String(ignoredKills));
+  };
   child.kill = { true: ignore, false: stop }[killIgnored];
   const chunks = [];
   child.stdin = new Writable({
@@ -80,3 +96,13 @@ childProcess.spawn = function fakeSpawn() {
   });
   return child;
 };
+
+// 速さを見積もれない声にする（環境変数があるときだけ）。speak.js は voices/index.js を通して mac-say.create() を呼ぶ。
+// mac-say.js は読み込んだ時点で spawn を受け取るので、spawn を偽物に差し替えたあとに読み込む
+const macSay = require('../../scripts/voices/mac-say');
+const createMacSay = macSay.create;
+const withoutSpeed = (env) => {
+  const voice = createMacSay(env);
+  return { speak: (text) => voice.speak(text), kill: () => voice.kill() };
+};
+macSay.create = { true: withoutSpeed, false: createMacSay }[String('FAKE_VOICE_WITHOUT_SPEED' in process.env)];

@@ -37,6 +37,10 @@ function runSpeak({ dataDir, voiceDir }, session, text, durationMs, extraEnv = {
 
 const marker = (voiceDir, pid, name) => path.join(voiceDir, `${pid}.${name}`);
 const has = (voiceDir, pid, name) => fs.existsSync(marker(voiceDir, pid, name));
+/** 印の中身。まだ書かれていなければ false */
+const content = (voiceDir, pid, name) => has(voiceDir, pid, name) && fs.readFileSync(marker(voiceDir, pid, name), 'utf8');
+/** speak.js が setTimeout() で作ったタイマーの長さ（ミリ秒）。プロセスが終わったあとに読む */
+const timers = (voiceDir, pid) => JSON.parse(fs.readFileSync(marker(voiceDir, pid, 'timers'), 'utf8'));
 
 test('同じタブの新しい返事が来ると、前の読み上げは自分の声を止めて終わり、新しい返事が読まれる', async (t) => {
   const env = setup(t);
@@ -160,6 +164,54 @@ test('同じタブの新しい返事で止めても前の声が終わらない�
   assert.equal(has(env.voiceDir, first.pid, 'done'), false, '前の声が読み終わるのを待たずに終わる');
   assert.equal(fs.readFileSync(marker(env.voiceDir, second.pid, 'started'), 'utf8'), '新しい返事');
   assert.equal(has(env.voiceDir, second.pid, 'done'), true, '新しい返事は、あきらめずに最後まで読む');
+  assert.equal(fs.existsSync(h.lockDir(env.workDir)), false, 'ロックが残らない');
+});
+
+test('止める処理が 2 回呼ばれても（時間切れのあとに差し替え）、待つためのタイマーは作り直さず、最初の待ちのあとに終わる', async (t) => {
+  const env = setup(t);
+  const first = runSpeak(env, 'tab-A', '止まらない返事', 10000, {
+    FAKE_TIME_LIMIT_MS: '300',
+    FAKE_STOP_GRACE_MS: '2000',
+    FAKE_KILL_IGNORED: '1',
+  });
+  await h.waitFor(() => content(env.voiceDir, first.pid, 'kill-ignored') === '1', 5000, '1 回目: 時間切れで止めようとする');
+  const second = runSpeak(env, 'tab-A', '新しい返事', 300);
+  await h.waitFor(() => content(env.voiceDir, first.pid, 'kill-ignored') === '2', 5000, '2 回目: 差し替えで止めようとする');
+
+  assert.equal(await first.exited, 0);
+  // 待つためのタイマー（2000ms）が 1 つだけなら、1 回目に止めたときに作ったタイマーで終わっている
+  assert.deepEqual(timers(env.voiceDir, first.pid).filter((delay) => delay === 2000), [2000], '待つためのタイマーは 1 つだけ');
+  assert.equal(has(env.voiceDir, first.pid, 'done'), false, '声が終わらなくても終わる');
+  assert.equal(await second.exited, 0);
+  assert.equal(has(env.voiceDir, second.pid, 'done'), true, '新しい返事が最後まで読まれる');
+  assert.equal(fs.existsSync(h.lockDir(env.workDir)), false, 'ロックが残らない');
+});
+
+test('上限のタイマーの長さは、声の速さ（Mac の -r）と読む文字数から決まる', async (t) => {
+  // [CLAUDE_SAY_RATE の値, 「短い返事」（4 文字）を読むときの上限（ミリ秒）]
+  //   -r 260 は 1 秒 8 文字: 4 ÷ 8 = 0.5 秒 → × 2.5 + 30 秒 = 31250
+  const cases = [
+    ['260', 31250],
+    ['520', 30625],
+    ['100', 33250],
+  ];
+  for (const [rate, expected] of cases) {
+    const env = setup(t);
+    const reading = runSpeak(env, 'tab-A', '短い返事', 200, { CLAUDE_SAY_RATE: rate });
+    assert.equal(await reading.exited, 0);
+    assert.equal(timers(env.voiceDir, reading.pid).includes(expected), true, `-r ${rate} の上限は ${expected}ms`);
+    assert.equal(has(env.voiceDir, reading.pid, 'done'), true, `-r ${rate}: 最後まで読む`);
+  }
+});
+
+test('速さを見積もれない声では、上限のタイマーを作らずに最後まで読む', async (t) => {
+  const env = setup(t);
+  const reading = runSpeak(env, 'tab-A', '短い返事', 200, { FAKE_VOICE_WITHOUT_SPEED: '1' });
+
+  assert.equal(await reading.exited, 0);
+  // 上限はいつも 30 秒以上なので、30 秒以上のタイマーがなければ、上限のタイマーは作っていない
+  assert.deepEqual(timers(env.voiceDir, reading.pid).filter((delay) => delay >= 30000), [], '上限のタイマーを作らない');
+  assert.equal(has(env.voiceDir, reading.pid, 'done'), true, '最後まで読む');
   assert.equal(fs.existsSync(h.lockDir(env.workDir)), false, 'ロックが残らない');
 });
 
