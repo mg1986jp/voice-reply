@@ -2,6 +2,7 @@
  * Stop フック（scripts/speak.js）を実際に起動するテスト。声は test/fixtures/fake-say.js の偽物を使う。
  *   node --test test/*.test.js
  *
+ * speak.js に渡す環境変数からは、PC に設定された voice-reply の設定（VOICE_REPLY_*）を取り除き、テストに要る値だけを入れる。
  * VOICE_REPLY_ENGINE は初めから os にする（本物の AivisSpeech Engine が動いている PC でも、本物の声を出さないため）。
  * AivisSpeech で読むテストは、テストの中で動く偽のエンジン（test/fixtures/fake-engine.js）につなぐ。
  */
@@ -33,7 +34,7 @@ function setup(t) {
 function runSpeak({ dataDir, voiceDir }, session, text, durationMs, extraEnv = {}) {
   const child = spawn(process.execPath, ['--require', FAKE_SAY, SPEAK], {
     env: {
-      ...process.env,
+      ...h.envWithoutVoiceReply(),
       CLAUDE_PLUGIN_DATA: dataDir,
       FAKE_VOICE_DIR: voiceDir,
       FAKE_VOICE_MS: String(durationMs),
@@ -291,7 +292,7 @@ test('読み上げが動かない OS では、順番待ちにも入らずに、�
   const env = setup(t);
   // OS は test/fixtures/platform.js で linux にする（声を出す前に終わるので、偽の声は使わない）
   const result = spawnSync(process.execPath, ['--require', PLATFORM, SPEAK], {
-    env: { ...process.env, CLAUDE_PLUGIN_DATA: env.dataDir, FAKE_PLATFORM: 'linux', VOICE_REPLY_ENGINE: 'os' },
+    env: { ...h.envWithoutVoiceReply(), CLAUDE_PLUGIN_DATA: env.dataDir, FAKE_PLATFORM: 'linux', VOICE_REPLY_ENGINE: 'os' },
     input: JSON.stringify({ session_id: 'tab-A', last_assistant_message: '<speak>読まない返事</speak>', cwd: '' }),
   });
   assert.equal(result.status, 0);

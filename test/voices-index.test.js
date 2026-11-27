@@ -5,6 +5,7 @@
  * エンジンは、テストの中で動く偽物（test/fixtures/fake-engine.js）を使う。本物のエンジンにはつながない。
  * child_process.spawn を偽物（test/fixtures/fake-spawn.js）に差し替えるので、声も音も出ない。
  * OS は Mac にそろえる（OS の声は say、AivisSpeech の音は afplay）。どの OS でも同じ確かめ方にするため。
+ * process.env を読むテストがあるので、PC に設定された voice-reply の設定（VOICE_REPLY_*）は、初めに消しておく。
  */
 'use strict';
 
@@ -13,6 +14,7 @@ const assert = require('node:assert/strict');
 const h = require('./helpers');
 const { startFakeEngine, closedUrl, fail, hold } = require('./fixtures/fake-engine');
 
+h.clearVoiceReplyEnv();
 const realPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
 const setPlatform = (value) => Object.defineProperty(process, 'platform', { ...realPlatform, value });
 setPlatform('darwin');
@@ -63,14 +65,10 @@ test('読み上げが動かない OS では、chooseVoice() はエンジンに�
 });
 
 test('chooseVoice() に環境変数を渡さないときは、process.env の設定で選ぶ', async (t) => {
-  // os にしておく（エンジンに問い合わせない。初期値の URL には本物のエンジンが動いていることがあるため）
-  const saved = process.env.VOICE_REPLY_ENGINE;
+  // os にしておく（エンジンに問い合わせない。初期値の URL には本物のエンジンが動いていることがあるため）。
+  // VOICE_REPLY_* は、このファイルの初めに消してあるので、終わったら消せば元どおり
   process.env.VOICE_REPLY_ENGINE = 'os';
-  // 終わったら元に戻す（もともとなければ消す。process.env に undefined を入れると文字列の "undefined" になるため）
-  t.after(() => {
-    delete process.env.VOICE_REPLY_ENGINE;
-    Object.assign(process.env, h.lookup({ undefined: {} }, String(saved), { VOICE_REPLY_ENGINE: saved }));
-  });
+  t.after(() => delete process.env.VOICE_REPLY_ENGINE);
   assert.equal(nameOf(await chooseVoice()), 'MacSay');
 });
 

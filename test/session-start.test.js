@@ -27,7 +27,7 @@ test('読み上げが動く OS（Mac・Windows）では要約の指示を渡し�
   ];
   for (const [platform, expected] of cases) {
     const result = spawnSync(process.execPath, ['--require', PLATFORM, SESSION_START], {
-      env: { ...process.env, CLAUDE_PLUGIN_DATA: dataDir, FAKE_PLATFORM: platform },
+      env: { ...h.envWithoutVoiceReply(), CLAUDE_PLUGIN_DATA: dataDir, FAKE_PLATFORM: platform },
       input: JSON.stringify({ hook_event_name: 'SessionStart', source: 'startup' }),
       encoding: 'utf8',
     });

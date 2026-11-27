@@ -29,6 +29,22 @@ function lookup(table, key, fallback) {
   return { [key]: fallback, ...table }[key];
 }
 
+/** 環境変数の名前が、voice-reply の設定（VOICE_REPLY_ で始まる）か */
+const isVoiceReplySetting = (name) => name.startsWith('VOICE_REPLY_');
+
+/**
+ * 環境変数から、voice-reply の設定（VOICE_REPLY_ で始まるもの）を除いた写しを返す。
+ * テストの子プロセスに渡す環境変数は、これにテストに要る値だけを足す（PC に設定された読み上げの設定を、テストが受け継がないため）
+ */
+function envWithoutVoiceReply(env = process.env) {
+  return Object.fromEntries(Object.entries(env).filter(([name]) => !isVoiceReplySetting(name)));
+}
+
+/** このテストのプロセスの process.env から、voice-reply の設定（VOICE_REPLY_ で始まるもの）を消す（PC の設定は変わらない） */
+function clearVoiceReplyEnv() {
+  for (const name of Object.keys(process.env).filter(isVoiceReplySetting)) delete process.env[name];
+}
+
 /** テストごとの作業フォルダを作り、終わったら消す */
 function makeWorkDir(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'voice-reply-test-'));
@@ -138,5 +154,5 @@ function track(promise) {
 
 module.exports = {
   makeWorkDir, lockDir, stateFile, latestFile, readState, writeState, writeRawState, plantLock, plantEmptyLock, lockIdentity,
-  waitFor, track, hookFs, throws, passThrough, fsError, lookup, sleep,
+  waitFor, track, hookFs, throws, passThrough, fsError, lookup, sleep, envWithoutVoiceReply, clearVoiceReplyEnv,
 };

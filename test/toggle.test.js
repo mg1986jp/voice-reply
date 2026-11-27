@@ -28,7 +28,7 @@ test('オンにしたとき、読み上げが動く OS（Mac・Windows）では�
   ];
   for (const [platform, expected] of cases) {
     const result = spawnSync(process.execPath, ['--require', PLATFORM, TOGGLE], {
-      env: { ...process.env, CLAUDE_PLUGIN_DATA: dataDir, FAKE_PLATFORM: platform },
+      env: { ...h.envWithoutVoiceReply(), CLAUDE_PLUGIN_DATA: dataDir, FAKE_PLATFORM: platform },
       input: JSON.stringify({ hook_event_name: 'UserPromptExpansion', command_name: 'voice-reply:toggle', command_args: 'on' }),
       encoding: 'utf8',
     });
