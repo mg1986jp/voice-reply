@@ -1,7 +1,7 @@
 {
   "name": "voice-reply",
-  "version": "0.1.2",
-  "description": "Claude Code の返事を OS 標準の声で読み上げる（Mac は say、Windows は SAPI）",
+  "version": "0.2.0",
+  "description": "Claude Code の返事を声で読み上げる（AivisSpeech Engine が動いていればその声、なければ OS 標準の声）",
   "author": {
     "name": "mg1986jp",
     "url": "https://github.com/mg1986jp"
@@ -9,5 +9,5 @@
   "homepage": "https://github.com/mg1986jp/voice-reply",
   "repository": "https://github.com/mg1986jp/voice-reply",
   "license": "MIT",
-  "keywords": ["voice", "text-to-speech", "tts", "read-aloud", "speech", "japanese", "macos", "windows", "読み上げ"]
+  "keywords": ["voice", "text-to-speech", "tts", "read-aloud", "speech", "japanese", "macos", "windows", "aivisspeech", "読み上げ"]
 }
