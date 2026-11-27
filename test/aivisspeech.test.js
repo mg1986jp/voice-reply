@@ -314,12 +314,15 @@ test('データフォルダが渡されないときは、WAV を OS の一時フ
   const played = [];
   fake.spawned.length = 0;
   fake.onSpawn = playInstantly(played);
-  const tempAudioDir = path.join(os.tmpdir(), 'voice-reply-audio');
-  t.after(() => fs.rmSync(tempAudioDir, { recursive: true, force: true }));
+  // OS の一時フォルダを、このテストだけのフォルダに差し替える（本物の一時フォルダの voice-reply-audio は、
+  // プラグイン本体の読み上げも使うので、テストでは作りも消しもしない）
+  const tempRoot = h.makeWorkDir(t);
+  t.mock.method(os, 'tmpdir', () => tempRoot);
 
   const voice = aivisspeech.create({ VOICE_REPLY_AIVIS_URL: engine.url });
   assert.equal(await voice.speak('読みます。'), SpeakOutcome.FINISHED);
-  assert.equal(path.dirname(played[0].file), tempAudioDir);
+  assert.equal(path.dirname(played[0].file), path.join(tempRoot, 'voice-reply-audio'));
+  assert.deepEqual(listDir(path.join(tempRoot, 'voice-reply-audio')), [], '鳴らし終えた WAV は消す');
 });
 
 test('読むもの（文字か数字）がない文章は、エンジンに問い合わせずに FINISHED', async (t) => {
