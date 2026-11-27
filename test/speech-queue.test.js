@@ -167,24 +167,14 @@ test('合図が古いと判定したあと、消す直前に合図が新しく�
   assert.equal(await queue.promise, true);
 });
 
-test('読み終わったあと、自分のタブの latest-* は残らない。同じタブの新しい要求が書いたものは残す', async (t) => {
+test('読み終わったあとも、自分のタブの latest-* は消さない（同じタブで待っていた古い要求が、古い返事を読まないように）', async (t) => {
   const workDir = h.makeWorkDir(t);
-  const first = new SpeechQueue('tab-A', workDir);
-  assert.equal(await first.acquire(), true);
-  first.release();
-  first.cleanupTempFiles();
-  assert.equal(fs.existsSync(h.latestFile(workDir, 'tab-A')), false);
-
-  const older = new SpeechQueue('tab-C', workDir);
-  assert.equal(await older.acquire(), true);
-  older.release();
-  const newer = new SpeechQueue('tab-C', workDir);
-  assert.equal(await newer.acquire(), true); // latest-<tab-C> は newer の番号になる
-  older.cleanupTempFiles();
-  assert.equal(fs.existsSync(h.latestFile(workDir, 'tab-C')), true, '新しい要求の latest は消さない');
-  newer.release();
-  newer.cleanupTempFiles();
-  assert.equal(fs.existsSync(h.latestFile(workDir, 'tab-C')), false);
+  const reader = new SpeechQueue('tab-A', workDir);
+  assert.equal(await reader.acquire(), true);
+  const requestId = h.readState(workDir).requestId;
+  reader.release();
+  reader.cleanupTempFiles();
+  assert.equal(fs.readFileSync(h.latestFile(workDir, 'tab-A'), 'utf8'), requestId, '最新の要求の番号が残る');
 });
 
 test('24 時間より古い一時ファイルを片付け、新しいものと lock・state は残す', async (t) => {

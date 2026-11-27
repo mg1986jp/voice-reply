@@ -52,7 +52,7 @@ test('同じタブの新しい返事が来ると、前の読み上げは自分�
   assert.equal(fs.readFileSync(marker(env.voiceDir, second.pid, 'started'), 'utf8'), '新しい返事');
   assert.equal(has(env.voiceDir, second.pid, 'done'), true);
   assert.equal(fs.existsSync(h.lockDir(env.workDir)), false, 'ロックが残らない');
-  assert.equal(fs.existsSync(h.latestFile(env.workDir, 'tab-A')), false, 'タブの latest-* が残らない');
+  assert.equal(fs.existsSync(h.latestFile(env.workDir, 'tab-A')), true, 'タブの latest-* は消さない（古くなったら片付ける）');
 });
 
 test('順番待ちの間にオフにされた返事は、順番が来ても読まれない', async (t) => {
@@ -73,16 +73,16 @@ test('順番待ちの間にオフにされた返事は、順番が来ても読�
   assert.equal(await waiting.exited, 0);
   assert.equal(has(env.voiceDir, waiting.pid, 'started'), false, '読まない');
   assert.equal(fs.existsSync(h.lockDir(env.workDir)), false, 'ロックが残らない');
-  assert.equal(fs.existsSync(h.latestFile(env.workDir, 'tab-B')), false, 'タブの latest-* が残らない');
+  assert.equal(fs.existsSync(h.latestFile(env.workDir, 'tab-B')), true, 'タブの latest-* は消さない（古くなったら片付ける）');
 });
 
-test('読んでいる途中で SIGTERM を受けたら、自分の声を止め、ロックと latest-* を片付けて終わる', async (t) => {
+test('読んでいる途中で SIGTERM を受けたら、自分の声を止め、ロックを返して終わる', async (t) => {
   const env = setup(t);
   const reading = runSpeak(env, 'tab-A', '止められる返事', 10000, { FAKE_SIGTERM_AFTER_START: '200' });
   assert.equal(await reading.exited, 0);
   assert.equal(has(env.voiceDir, reading.pid, 'killed'), true, '自分の声を止める');
   assert.equal(fs.existsSync(h.lockDir(env.workDir)), false, 'ロックが残らない');
-  assert.equal(fs.existsSync(h.latestFile(env.workDir, 'tab-A')), false, 'タブの latest-* が残らない');
+  assert.equal(fs.existsSync(h.latestFile(env.workDir, 'tab-A')), true, 'タブの latest-* は消さない（古くなったら片付ける）');
 });
 
 test('読んでいる途中でオフにされても、最後まで読む', async (t) => {
@@ -94,5 +94,5 @@ test('読んでいる途中でオフにされても、最後まで読む', async
   assert.equal(await reading.exited, 0);
   assert.equal(has(env.voiceDir, reading.pid, 'done'), true, '最後まで読む');
   assert.equal(has(env.voiceDir, reading.pid, 'killed'), false);
-  assert.equal(fs.existsSync(h.latestFile(env.workDir, 'tab-A')), false, 'タブの latest-* が残らない');
+  assert.equal(fs.existsSync(h.latestFile(env.workDir, 'tab-A')), true, 'タブの latest-* は消さない（古くなったら片付ける）');
 });

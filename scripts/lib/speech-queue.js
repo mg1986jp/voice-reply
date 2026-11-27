@@ -194,17 +194,14 @@ class SpeechQueue {
   }
 
   /**
-   * タブごとの一時ファイルを片付ける。読み上げの最後（読まずに終わるときも）に呼ぶ。
-   *   - 自分の latest-<タブ>: まだ自分の番号なら消す（同じタブの新しい要求が書いていれば残す）
-   *   - 古い一時ファイル: TEMP_MAX_AGE_MS より長く更新されていないものを消す（落ちたプロセスが残したものなど）
-   * latest-<タブ> がないときは「自分が最新」として扱うので、使っているタブのものを消しても動きは壊れない。
+   * タブごとの一時ファイルのうち、TEMP_MAX_AGE_MS より長く更新されていないものを片付ける（落ちたプロセスが残したものなど）。
+   * 読み上げの最後（読まずに終わるときも）に呼ぶ。
+   *
+   * 読み終わったときに自分の latest-<タブ> は消さない。消すと、同じタブで待っている古い要求が、
+   * latest-<タブ> がないことを「自分が最新」と受け取り、古い返事を読むおそれがあるため。
+   * latest-<タブ> も、ほかの一時ファイルと同じく、古くなったら片付ける。
    */
   cleanupTempFiles() {
-    try {
-      if (fs.readFileSync(this.#latestPath, 'utf8').trim() === this.#requestId) fs.rmSync(this.#latestPath, { force: true });
-    } catch {
-      // ない、または読めないときは何もしない
-    }
     let names;
     try {
       names = fs.readdirSync(this.#workDir);
