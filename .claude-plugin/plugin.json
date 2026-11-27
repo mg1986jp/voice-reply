@@ -8,5 +8,6 @@
   },
   "homepage": "https://github.com/mg1986jp/voice-reply",
   "repository": "https://github.com/mg1986jp/voice-reply",
-  "keywords": ["tts", "speech", "japanese", "say", "sapi"]
+  "license": "MIT",
+  "keywords": ["voice", "text-to-speech", "tts", "read-aloud", "speech", "japanese", "macos", "windows", "読み上げ"]
 }
