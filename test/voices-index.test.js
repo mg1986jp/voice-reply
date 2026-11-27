@@ -21,8 +21,15 @@ const fake = require('./fixtures/fake-spawn').install();
 const { getOsVoice, chooseVoice } = require('../scripts/voices');
 
 const finishSoon = (child) => setImmediate(() => child.finish(0));
+/** 偽の afplay の動き: 起動できたこと（spawn）を知らせてから、すぐに鳴らし終えたことにする */
+const playSoon = (child) => setImmediate(() => {
+  child.emit('spawn');
+  child.finish(0);
+});
+/** 偽の afplay の動き: 起動できない（spawn は来ず、error だけが来る） */
+const cannotStart = (child) => setImmediate(() => child.emit('error', new Error('ENOENT: injected by test')));
 /** 偽の say と afplay の動き: say は文章を受け取ったら、afplay は起動したら、すぐに読み終えた（鳴らし終えた）ことにする */
-const INSTANT = { say: (child) => child.once('input-end', () => finishSoon(child)), afplay: finishSoon };
+const INSTANT = { say: (child) => child.once('input-end', () => finishSoon(child)), afplay: playSoon };
 /** 偽の子プロセスの記録を空にし、command ごとの動きを決める（表にない command は、止められるまで終わらない） */
 function resetSpawn(behaviors) {
   fake.spawned.length = 0;
@@ -106,6 +113,17 @@ test('auto でエンジンが応えないまま 1.5 秒たったら、待つの�
   await h.waitFor(() => engine.aborted.length === 1, 5000, '応えを待つのをやめたら、問い合わせを取りやめる');
 });
 
+test('AivisSpeech の音を鳴らす afplay を起動できなかったら（まだ何も聞こえていない）、OS の声で最初から全部読む', async (t) => {
+  const engine = await startFakeEngine(t);
+  resetSpawn({ say: INSTANT.say, afplay: cannotStart });
+  const voice = await chooseVoice({ CLAUDE_PLUGIN_DATA: h.makeWorkDir(t), VOICE_REPLY_AIVIS_URL: engine.url });
+  const segments = [];
+  await voice.speak('一文目です。二文目です。', { onSegment: (segment, by) => segments.push([segment, nameOf(by)]) });
+  assert.deepEqual(segments, [['一文目です。', 'AivisSpeech'], ['一文目です。二文目です。', 'MacSay']]);
+  assert.equal(spawnedBy('afplay').length, 1, 'AivisSpeech は 1 文目を鳴らそうとした');
+  assert.deepEqual(spawnedBy('say').map((child) => child.input), ['一文目です。二文目です。'], 'OS の声で全部読む');
+});
+
 test('AivisSpeech が 1 文目を鳴らし始める前に失敗したら、OS の声で最初から全部読む（onSegment は、読み直す OS の声で全体をもう一度呼ぶ）', async (t) => {
   const engine = await startFakeEngine(t, { plan: { '/audio_query': { 1: fail(500) } } });
   resetSpawn(INSTANT);
@@ -130,7 +148,8 @@ test('AivisSpeech が読んでいる途中で失敗したら、そこでやめ�
 
 test('AivisSpeech で読んでいる間に kill() すると、AivisSpeech を止め、OS の声には切り替えない', async (t) => {
   const engine = await startFakeEngine(t);
-  resetSpawn({ say: INSTANT.say }); // afplay は、止められるまで鳴らし終えない
+  // afplay は起動できたこと（spawn）だけを知らせ、止められるまで鳴らし終えない
+  resetSpawn({ say: INSTANT.say, afplay: (child) => setImmediate(() => child.emit('spawn')) });
   const voice = await chooseVoice({ CLAUDE_PLUGIN_DATA: h.makeWorkDir(t), VOICE_REPLY_AIVIS_URL: engine.url });
   const speaking = voice.speak('一文目です。二文目です。');
   await h.waitFor(() => spawnedBy('afplay').length === 1, 5000, 'AivisSpeech が 1 文目を鳴らし始める');

@@ -109,11 +109,15 @@ function fakeSay() {
   return child;
 }
 
-/** 偽の afplay（AivisSpeech の音）。鳴らした WAV の中身を <PID>.afplay に書き足し、FAKE_VOICE_MS ミリ秒で鳴らし終えたことにする */
+/**
+ * 偽の afplay（AivisSpeech の音）。起動できたこと（spawn）を知らせ、鳴らした WAV の中身を <PID>.afplay に書き足し、
+ * FAKE_VOICE_MS ミリ秒で鳴らし終えたことにする
+ */
 function fakeAfplay(args) {
   const child = new EventEmitter();
   child.exitCode = null;
   child.signalCode = null;
+  setImmediate(() => child.emit('spawn'));
   fs.appendFileSync(path.join(dir, `${process.pid}.afplay`), `${fs.readFileSync(args[0], 'utf8')}\n`);
   const timer = setTimeout(() => {
     child.exitCode = 0;

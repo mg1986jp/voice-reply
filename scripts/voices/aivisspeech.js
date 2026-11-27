@@ -16,8 +16,11 @@
  * speak() の結果（SpeakOutcome）:
  *   FINISHED             最後まで読んだ
  *   STOPPED              kill() で止められた
- *   FAILED_BEFORE_START  1 文目を鳴らし始める前に失敗した（まだ何も聞こえていない）。voices/index.js が OS の声で読み直す
- *   FAILED               読んでいる途中で失敗した。そこでやめる（鳴っていた文は最後まで鳴らす）
+ *   FAILED_BEFORE_START  1 文目の音を鳴らし始める前に失敗した（まだ何も聞こえていない）。voices/index.js が OS の声で読み直す。
+ *                        「鳴らし始めた」は、音を出す処理が実際に始まったこと（lib/wav-player.js の started）。
+ *                        エンジンの失敗のほか、afplay を起動できない、Windows で WAV を読み込めない・WAV の形でない、も含む
+ *   FAILED               音を鳴らし始めたあとに失敗した（1 文目を鳴らしている途中、2 文目から）。そこでやめる
+ *                        （次の文を作るのに失敗したときは、鳴っていた文を最後まで鳴らしてからやめる）
  */
 'use strict';
 
@@ -176,7 +179,7 @@ class AivisSpeech {
     this.#removeStaleAudio();
 
     let next = null; // 作っている途中の、次の文（#prepare() の Promise）
-    let startedPlaying = false;
+    let startedPlaying = false; // 音を鳴らし始めたか（一度鳴らし始めたら、あとの文で失敗しても true のまま）
     const failed = () => (startedPlaying ? SpeakOutcome.FAILED : SpeakOutcome.FAILED_BEFORE_START);
     try {
       onSegment(sentences[0], this);
@@ -193,11 +196,11 @@ class AivisSpeech {
         if (prepared.error) return failed();
         // この文を鳴らしている間に、次の文を作る
         if (i + 1 < sentences.length) next = this.#prepare(sentences[i + 1], styleId, abort.signal);
-        startedPlaying = true;
-        const played = await player.play(prepared.file);
+        const { played, started } = await player.play(prepared.file);
+        startedPlaying ||= started;
         removeFile(prepared.file);
         if (this.#killed) return SpeakOutcome.STOPPED;
-        if (!played) return SpeakOutcome.FAILED;
+        if (!played) return failed();
       }
     } catch {
       // 声の一覧を取れなかったときなど

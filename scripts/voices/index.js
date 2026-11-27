@@ -14,7 +14,8 @@
  *
  * どの声で読むか（環境変数 VOICE_REPLY_ENGINE）:
  *   auto（初期値）  AivisSpeech Engine が短い時間で応答すれば AivisSpeech、応答しなければ OS の声。
- *                   AivisSpeech が 1 文目を鳴らし始める前に失敗したら、OS の声で全部読む。読んでいる途中で失敗したら、そこでやめる
+ *                   AivisSpeech が 1 文目の音を鳴らし始める前に失敗したら（afplay を起動できない、WAV を読み込めないときも）、
+ *                   OS の声で全部読む。音を鳴らし始めたあとに失敗したら、そこでやめる
  *   aivisspeech     いつも AivisSpeech（エンジンが動いているかを確かめず、失敗しても OS の声に切り替えない）
  *   os              いつも OS の声（Mac は say、Windows は SAPI の声）
  *   これ以外の値は auto として扱う。
@@ -36,8 +37,8 @@ function parseEngine(value) {
 }
 
 /**
- * AivisSpeech で読み、1 文目を鳴らし始める前に失敗したら、OS の声で全部読み直す。
- * 読んでいる途中で失敗したときは、読み直さずにそこでやめる（同じところを2回聞かせないため）。
+ * AivisSpeech で読み、1 文目の音を鳴らし始める前に失敗したら（AivisSpeech の結果が FAILED_BEFORE_START）、OS の声で全部読み直す。
+ * 音を鳴らし始めたあとに失敗したときは、読み直さずにそこでやめる（同じところを2回聞かせないため）。
  *
  * kill() は、そのときに読んでいる方の声を止める。AivisSpeech を止めたあとは、AivisSpeech の結果は STOPPED になるので、
  * OS の声に切り替わることはない。OS の声に切り替えるときは、切り替えと読み始めを続けて行う（その間に kill() は入らない）。

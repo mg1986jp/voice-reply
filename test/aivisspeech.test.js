@@ -39,10 +39,22 @@ function recordPlay(child) {
   return { file, text: fs.readFileSync(file, 'utf8'), filesAtPlay: fs.readdirSync(path.dirname(file)) };
 }
 
-/** 偽の afplay の動き: 渡された WAV を記録し、すぐに鳴らし終えたことにする */
+/** 偽の afplay の動き: 渡された WAV を記録し、起動できたこと（spawn）を知らせてから、すぐに鳴らし終えたことにする */
 const playInstantly = (played) => (child) => {
   played.push(recordPlay(child));
-  setImmediate(() => child.finish(0));
+  setImmediate(() => {
+    child.emit('spawn');
+    child.finish(0);
+  });
+};
+
+/** 偽の afplay の動き: 起動できたこと（spawn）を知らせ（知らせたら spawnEmitted を true にする）、テストが finish() するまで鳴らし続ける */
+const holdPlaying = (held) => (child) => {
+  held.push(child);
+  setImmediate(() => {
+    child.emit('spawn');
+    child.spawnEmitted = true;
+  });
 };
 
 /** 偽のエンジンと、それにつなぐ声を用意する。偽の afplay は、すぐに鳴らし終える */
@@ -88,7 +100,7 @@ test('最後まで読む: 文ごとに audio_query → synthesis で WAV を作�
 test('1 文を鳴らしている間に、次の文を作る（onSegment を渡さなくても読める）', async (t) => {
   const env = await setup(t);
   const held = [];
-  fake.onSpawn = (child) => held.push(child);
+  fake.onSpawn = holdPlaying(held);
 
   const speaking = env.voice.speak('一文目です。二文目です。');
   await h.waitFor(() => held.length === 1, 5000, '1 文目を鳴らし始める');
@@ -119,7 +131,7 @@ test('設定のスタイルがエンジンに入っていれば、それを使�
   }
 });
 
-test('1 文目を鳴らし始める前に失敗したら FAILED_BEFORE_START（何も鳴らさず、WAV も残さない）', async (t) => {
+test('1 文目の音声を作るまでにエンジンが失敗したら FAILED_BEFORE_START（何も鳴らさず、WAV も残さない）', async (t) => {
   const unreachable = await closedUrl();
   // [説明, エンジンの声の一覧, エンジンの応え方, ほかの環境変数]
   const cases = [
@@ -153,29 +165,44 @@ test('2 文目からを作るのに失敗したら FAILED（鳴らしていた 1
   }
 });
 
-test('鳴らすのに失敗したら FAILED（鳴らし始めているので FAILED_BEFORE_START にはしない）。作っておいた次の文の WAV も消す', async (t) => {
-  // [説明, 偽の afplay の失敗のしかた]
+test('1 文目の afplay を起動できなければ FAILED_BEFORE_START（音を鳴らし始めていない）、起動してから失敗で終われば FAILED。どちらも 2 文目は鳴らさず、作っておいた 2 文目の WAV も消す', async (t) => {
+  /** 偽の afplay の動き: 起動できたこと（spawn）を知らせず、テストが失敗させるまで待つ */
+  const holdWithoutStarting = (held) => (child) => held.push(child);
+  // [説明, 偽の afplay の動き, 失敗させてよくなった印, 失敗のしかた, 結果]
   const cases = [
-    ['afplay が失敗で終わる', (child) => child.finish(1)],
-    ['afplay を起動できない', (child) => child.emit('error', new Error('ENOENT: injected by test'))],
+    ['afplay を起動できない（spawn は来ず、error だけが来る）', holdWithoutStarting, () => true, (child) => child.emit('error', new Error('ENOENT: injected by test')), SpeakOutcome.FAILED_BEFORE_START],
+    ['afplay が起動してから、失敗で終わる', holdPlaying, (child) => child.spawnEmitted === true, (child) => child.finish(1), SpeakOutcome.FAILED],
   ];
-  for (const [label, failure] of cases) {
+  for (const [label, behavior, ready, failure, expected] of cases) {
     const env = await setup(t);
     const held = [];
-    fake.onSpawn = (child) => held.push(child);
+    fake.onSpawn = behavior(held);
     const speaking = env.voice.speak('一文目です。二文目です。');
-    await h.waitFor(() => held.length === 1 && listDir(env.audioDir).length === 2, 5000, `${label}: 1 文目を鳴らしている間に、2 文目の WAV ができる`);
+    await h.waitFor(() => held.length === 1 && ready(held[0]) && listDir(env.audioDir).length === 2, 5000, `${label}: 1 文目を鳴らそうとしている間に、2 文目の WAV ができる`);
     failure(held[0]);
-    assert.equal(await speaking, SpeakOutcome.FAILED, label);
+    assert.equal(await speaking, expected, label);
     assert.equal(held.length, 1, `${label}: 2 文目は鳴らさない`);
     assert.deepEqual(listDir(env.audioDir), [], `${label}: 2 文目の WAV も消す`);
   }
 });
 
+test('1 文目を鳴らしたあと、2 文目の afplay を起動できなければ FAILED（OS の声で読み直さない）', async (t) => {
+  const env = await setup(t);
+  // [何番目の afplay か → 偽の afplay の動き]: 1 つ目は鳴らし終え、2 つ目は起動できない
+  const behaviors = {
+    1: playInstantly(env.played),
+    2: (child) => setImmediate(() => child.emit('error', new Error('ENOENT: injected by test'))),
+  };
+  fake.onSpawn = (child) => behaviors[fake.spawned.length](child);
+  assert.equal(await env.voice.speak('一文目です。二文目です。'), SpeakOutcome.FAILED);
+  assert.deepEqual(env.played.map(({ text }) => text), ['WAV:一文目です。']);
+  assert.deepEqual(listDir(env.audioDir), []);
+});
+
 test('鳴らしている途中で kill() すると、afplay を SIGKILL で止め、作りかけの次の文の要求を取りやめて STOPPED', async (t) => {
   const env = await setup(t, { plan: { '/synthesis': { 2: hold } } });
   const held = [];
-  fake.onSpawn = (child) => held.push(child);
+  fake.onSpawn = holdPlaying(held);
   const speaking = env.voice.speak('一文目です。二文目です。');
   await h.waitFor(() => held.length === 1 && env.engine.count('/synthesis') === 2, 5000, '1 文目を鳴らし、2 文目を作っている');
 
@@ -218,7 +245,7 @@ test('kill() してから speak() すると、エンジンに問い合わせず�
 test('次の文に取りかかるとき（onSegment の中）に kill() すると、もうできていたその文の WAV を消して STOPPED', async (t) => {
   const env = await setup(t);
   const held = [];
-  fake.onSpawn = (child) => held.push(child);
+  fake.onSpawn = holdPlaying(held);
   const speaking = env.voice.speak('一文目です。二文目です。', {
     onSegment: (segment) => h.lookup({ '二文目です。': () => env.voice.kill() }, segment, () => {})(),
   });
@@ -248,7 +275,10 @@ test('WAV を消せないときは、そのまま残す（古くなってから�
   fake.onSpawn = (child) => {
     env.played.push(recordPlay(child));
     restores.push(h.hookFs('rmSync', { [child.args[0]]: { other: h.throws('EBUSY') } }));
-    setImmediate(() => child.finish(0));
+    setImmediate(() => {
+      child.emit('spawn');
+      child.finish(0);
+    });
   };
   const outcome = await env.voice.speak('読みます。');
   restores.forEach((restore) => restore());
