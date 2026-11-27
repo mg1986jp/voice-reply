@@ -11,10 +11,12 @@
  *   同じタブ（同一セッション）→ 読んでいる本人が新しい返事に気づいて自分の声を止め、新しい方に差し替え
  *   別のタブ（別セッション）→ 順番待ち
  *   ほかのプロセスは止めない（手動の say なども一切触らない）
+ *   自分の声を止めても読み上げが終わらないときは、少し待って、ロックを返して終わる
  *
  * 構成:
  *   lib/text.js          読む文章を作る（OS 非依存）
  *   lib/speech-queue.js  mkdir ベースの排他制御（OS 非依存）
+ *   lib/speech-limit.js  読み上げを止めるときの時間の決まり（OS 非依存）
  *   voices/              声ごとの読み上げ処理と、OS に合う声の選択
  *
  * 読み上げがオフ（/voice-reply:toggle off）のときは、何もせずにすぐ終わる。
@@ -29,6 +31,7 @@ const path = require('node:path');
 const { buildSpeechText, extractLastTurnText } = require('./lib/text');
 const { SpeechQueue } = require('./lib/speech-queue');
 const { getDataDir, getWorkDir } = require('./lib/paths');
+const { STOP_GRACE_MS } = require('./lib/speech-limit');
 const { isEnabled } = require('./lib/state');
 const { getVoice } = require('./voices');
 
@@ -67,26 +70,37 @@ async function main() {
   if (!voice) return;
   const queue = new SpeechQueue(sessionId, getWorkDir(dataDir));
 
-  // process.exit() は finally を飛ばすため、ロック解放と後片付けは必ずその直前で行う
-  const handleSignal = () => {
-    voice.kill();
+  // ロックを返し、後片付けをして、すぐに終わる。process.exit() は finally を飛ばすため、必ずその直前で行う
+  const finishNow = () => {
     queue.release();
     queue.cleanupTempFiles();
     process.exit(0);
   };
+  const handleSignal = () => {
+    voice.kill();
+    finishNow();
+  };
   process.on('SIGTERM', handleSignal);
   process.on('SIGINT', handleSignal);
+
+  // 自分の声だけを止める。ふつうは声が止まると読み上げが終わり、finally でロックを返す。
+  // 止めても STOP_GRACE_MS のうちに読み上げが終わらないときは、待つのをやめて、ロックを返して終わる
+  let graceTimer = null;
+  const stopVoice = () => {
+    voice.kill();
+    graceTimer ??= setTimeout(finishNow, STOP_GRACE_MS).unref();
+  };
 
   try {
     if (!(await queue.acquire())) return;
     // 順番待ちのあいだにオフにされていたら、読まずに終わる（ロックは finally で返す）。
     // 読み始めたあとにオフにされた場合は、確かめ直さずに最後まで読む
     if (!isEnabled(dataDir)) return;
-    // 同じタブの新しい返事が来たとき、またはロックを失ったとき（合図が途切れた間にほかのタブに取られたとき）は、
-    // 自分の声だけを止める（声が止まると読み上げが終わり、finally でロックを返す）
-    queue.startWatching(() => voice.kill());
+    // 同じタブの新しい返事が来たとき、またはロックを失ったとき（合図が途切れた間にほかのタブに取られたとき）は、自分の声を止める
+    queue.startWatching(stopVoice);
     await voice.speak(speechText);
   } finally {
+    clearTimeout(graceTimer);
     queue.release();
     queue.cleanupTempFiles();
   }
