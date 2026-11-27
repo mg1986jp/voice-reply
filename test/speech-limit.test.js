@@ -42,10 +42,12 @@ test('声を止めてから、読み上げが終わるのを待つのは 2 秒',
   assert.equal(STOP_GRACE_MS, 2000);
 });
 
-// SpeechLimitTimer のテストは、node:test のモックの時計（setTimeout と clearTimeout）で時間を進める
+// SpeechLimitTimer のテストは、node:test のモックの時計で時間を進める。
+// enable() は引数なしで呼ぶ（すべてのタイマーをモックする）。引数の形は Node の版で違い（v18 系は配列、
+// v20.11.0・v21.2.0 からは { apis } のオブジェクト）、引数なしなら、モックの時計がある版（v18.19.0・v20.4.0 から）のどれでも通るため
 
 test('SpeechLimitTimer は restart() のたびに測り直し、最後に測り直した上限を超えたときに 1 回だけ呼ぶ', (t) => {
-  t.mock.timers.enable({ apis: ['setTimeout'] });
+  t.mock.timers.enable();
   let expired = 0;
   const timer = new SpeechLimitTimer(() => {
     expired += 1;
@@ -64,7 +66,7 @@ test('SpeechLimitTimer は restart() のたびに測り直し、最後に測り�
 });
 
 test('SpeechLimitTimer は clear() で止め、restart(null) では測らない（前の上限も取り消す）', (t) => {
-  t.mock.timers.enable({ apis: ['setTimeout'] });
+  t.mock.timers.enable();
   // [説明, タイマーにすること]
   const cases = [
     ['clear() したら呼ばない', (timer) => {

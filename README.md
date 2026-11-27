@@ -266,6 +266,8 @@ node --test test/*.test.js
 ```
 
 - **必要なもの**：Node.js だけです。テストは Node の標準の機能（`node:test` と `node:assert`）だけで書いているので、npm パッケージを入れる必要はありません
+- **Node.js の版**：テストを動かすには、Node.js 18.19 以上（20 系なら 20.4 以上）が要ります。プラグイン本体は 18 以上で動きますが、テストは Node のモックの時計（`mock.timers`。v18.19.0 と v20.4.0 で入りました）を使うためです
+- **Windows の PowerShell で動かすとき**：PowerShell は `test/*.test.js` の `*` を展開しません。Node.js 21 からは Node が展開するので、上のコマンドのままで動きます。それより前の版では、`node --test (Get-ChildItem test\*.test.js).FullName` と書いて、PowerShell にファイルの一覧を渡させます
 - **実行結果**：すべてのテストが通ると、最後に `fail 0` と表示されます。待ち時間を確かめるテストがあるため、終わるまで20秒ほどかかります
 - **声について**：テストでは本物の声も音も出しません。声を出す子プロセス（`say`、PowerShell、`afplay`）は偽物にし、Mac として動いていることにするテストもあるので、Windows でも Mac 向けの処理まで確かめられます
 - **AivisSpeech Engine について**：テストでは、テストの中で動く偽のエンジンを使います。本物のエンジンが動いている PC でも、本物のエンジンにはつなぎません
