@@ -12,9 +12,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { setTimeout: sleep } = require('node:timers/promises');
 
-const STALE_CHECK_INTERVAL_MS = 2000;
-/** 同じタブの持ち主がロックを返すのを待つ間に、確かめ直す間隔 */
-const SAME_TAB_POLL_MS = 100;
+/** ロックを待っている間に、空いたかを確かめ直す間隔（同じタブも別のタブも同じ） */
+const POLL_INTERVAL_MS = 150;
 /** 読んでいる間に、同じタブの新しい要求が来たかを確かめる間隔 */
 const WATCH_INTERVAL_MS = 100;
 /** 持ち主が、生存の合図（state の beatAt）を書き直す間隔 */
@@ -109,23 +108,21 @@ class SpeechQueue {
         if (this.#isStale(snapshot)) {
           if (!this.#countRetry()) return false;
           this.#removeIfUnchanged(snapshot);
-          await sleep(100);
         } else if (snapshot.read.kind === 'present' && snapshot.read.state.session === this.#sessionId) {
           // 同じタブ: 読んでいる本人が新しい要求に気づいて自分の声を止め、ロックを返すのを待つ
           sameTabSince ??= Date.now();
           if (Date.now() - sameTabSince > SAME_TAB_GIVE_UP_MS) return false;
-          await sleep(SAME_TAB_POLL_MS);
         } else {
           sameTabSince = null;
-          await sleep(STALE_CHECK_INTERVAL_MS);
         }
+        await sleep(POLL_INTERVAL_MS);
         continue;
       }
       // 取ったらすぐに state（最初の合図）を書く。書けなければロックを返して試し直す
       if (!this.#writeState()) {
         removeQuietly(fs.rmdirSync, this.#lockDir);
         if (!this.#countRetry()) return false;
-        await sleep(100);
+        await sleep(POLL_INTERVAL_MS);
         continue;
       }
       this.#locked = true;
