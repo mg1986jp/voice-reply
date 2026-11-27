@@ -141,25 +141,31 @@ class SpeechQueue {
   }
 
   /**
-   * 読んでいる間の見張りと、生存の合図の書き直しを始める。次のときに onStop(reason) を1回だけ呼ぶ。
-   *   'replaced'  同じタブの新しい要求が来た
-   *   'lost'      ロックを失った（合図が途切れた間に片付けられた。ロックには触らずに終わる）
+   * 読んでいる間の見張りと、生存の合図の書き直しを始める。次のときに onStop(reason) を呼ぶ（理由ごとに1回だけ）。
+   *   'replaced'  同じタブの新しい要求が来た。合図は release() まで書き続ける
+   *               （声が止まらずにロックを返せないとき、合図が途切れて新しい要求に取られ、声が重なるのを防ぐ。
+   *                新しい要求は SAME_TAB_GIVE_UP_MS で読まずにあきらめる）
+   *   'lost'      ロックを失った（合図が途切れた間に片付けられた）。見張りも合図もやめ、ロックには触らずに終わる
    * 呼ばれた側は自分の声を止める（声が止まれば読み上げが終わり、release() でロックが返る）。
    */
   startWatching(onStop) {
     this.stopWatching();
     let lastBeat = Date.now();
-    const stop = (reason) => {
-      this.stopWatching();
-      if (reason === 'lost') this.#locked = false;
-      onStop(reason);
-    };
+    let replaced = false;
     this.#watchTimer = setInterval(() => {
-      if (!this.#isLatestRequest()) return stop('replaced');
+      if (!replaced && !this.#isLatestRequest()) {
+        replaced = true;
+        onStop('replaced');
+      }
       const now = Date.now();
       if (now - lastBeat < HEARTBEAT_INTERVAL_MS) return;
       const owns = this.#ownsLock();
-      if (owns === false) return stop('lost');
+      if (owns === false) {
+        this.stopWatching();
+        this.#locked = false;
+        onStop('lost');
+        return;
+      }
       // 一時的に読めない、または書けないときは、次の回に書き直す（STALE_AFTER_MS までに何度か試せる）
       if (owns === true && this.#writeState()) lastBeat = now;
     }, WATCH_INTERVAL_MS);
