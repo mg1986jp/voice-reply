@@ -13,6 +13,19 @@
         ]
       }
     ],
+    "UserPromptExpansion": [
+      {
+        "matcher": "^voice-reply:toggle$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/toggle.js"],
+            "timeout": 10
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [

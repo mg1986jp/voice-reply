@@ -17,6 +17,7 @@
  *   lib/speech-queue.js  mkdir ベースの排他制御（OS 非依存。前の読み上げの止め方だけ OS ごとに違う）
  *   voices/              声ごとの読み上げ処理と、OS に合う声の選択
  *
+ * 読み上げがオフ（/voice-reply:toggle off）のときは、何もせずにすぐ終わる。
  * 一時ファイルはプラグインのデータフォルダ（CLAUDE_PLUGIN_DATA）の tmp/ に置く。
  * 声と速さの設定は voices/ の各ファイルを参照。Node の標準モジュールだけで動く（npm パッケージ不要）。
  */
@@ -27,6 +28,7 @@ const path = require('node:path');
 const { buildSpeechText, extractLastTurnText } = require('./lib/text');
 const { SpeechQueue } = require('./lib/speech-queue');
 const { getDataDir, getWorkDir } = require('./lib/paths');
+const { isEnabled } = require('./lib/state');
 const { getVoice } = require('./voices');
 
 function readHookInput() {
@@ -40,7 +42,8 @@ function readHookInput() {
 
 async function main() {
   const dataDir = getDataDir();
-  if (!dataDir) return;
+  // オフのときは、返事を読む前にすぐ終わる
+  if (!dataDir || !isEnabled(dataDir)) return;
 
   const input = readHookInput();
   if (!input) return;
