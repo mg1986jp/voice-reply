@@ -1,0 +1,12 @@
+{
+  "name": "voice-reply",
+  "version": "0.1.0",
+  "description": "Claude Code の返事を OS 標準の声で読み上げる（Mac は say、Windows は SAPI）",
+  "author": {
+    "name": "mg1986jp",
+    "url": "https://github.com/mg1986jp"
+  },
+  "homepage": "https://github.com/mg1986jp/voice-reply",
+  "repository": "https://github.com/mg1986jp/voice-reply",
+  "keywords": ["tts", "speech", "japanese", "say", "sapi"]
+}
