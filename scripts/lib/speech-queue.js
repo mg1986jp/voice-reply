@@ -1,28 +1,37 @@
 /**
- * 排他制御（mkdir ロック + セッション番号による差し替え）
+ * 排他制御（mkdir ロック + 持ち主の生存の合図 + セッション番号による差し替え）
  *
- * OS や声に依存しない。前の読み上げの止め方だけ OS ごとに違う。
+ * ほかのプロセスを止めることはしない。止めるのは、いつも声を出している本人（自分の子プロセス）だけ。
+ * 持ち主がいるかどうかは PID ではなく、持ち主が書き直し続ける合図（state の beatAt）で見分ける。
+ * OS や声に依存しない（Node の標準モジュールだけ）。
  */
 'use strict';
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
-const { spawn } = require('node:child_process');
 const { setTimeout: sleep } = require('node:timers/promises');
-const { WIN_TASKKILL, WIN_TASKLIST } = require('./windows');
 
-const STALE_CHECK_INTERVAL_MS = 2000;
+/** ロックを待っている間に、空いたかを確かめ直す間隔（同じタブも別のタブも同じ） */
+const POLL_INTERVAL_MS = 150;
+/** 読んでいる間に、同じタブの新しい要求が来たかを確かめる間隔 */
+const WATCH_INTERVAL_MS = 100;
+/** 持ち主が、生存の合図（state の beatAt）を書き直す間隔 */
+const HEARTBEAT_INTERVAL_MS = 500;
+/** 合図がこれより古ければ、持ち主はいないとみなす */
+const STALE_AFTER_MS = 3000;
+/** state がない（または読めない形の）ロックを、持ち主がいないとみなすまでの猶予。mkdir から state を書くまでの間を守る */
+const NO_STATE_GRACE_MS = 5000;
+/** 同じタブの持ち主が、合図を書いているのにロックを返さないとき、待つのをあきらめるまでの時間 */
+const SAME_TAB_GIVE_UP_MS = 5000;
+/** これより長く更新されていない、タブごとの一時ファイルは片付ける */
+const TEMP_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+/** 片付けの対象: latest-<タブ>、その書きかけ（latest-<タブ>.<PID>）、state の書きかけ（state.tmp.<PID>）。lock と state は対象外 */
+const TEMP_FILE_PATTERN = /^(?:latest-[0-9a-f]{16}(?:\.\d+)?|state\.tmp\.\d+)$/;
 
-function isProcessAlive(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    // EPERM は「プロセスはいるが権限がない」なので生きている扱い
-    return err.code !== 'ESRCH';
-  }
-}
+/** #readState() の結果 */
+const ABSENT = Object.freeze({ kind: 'absent' }); // state がない、または読めない形（書く前、古い版の形式など）
+const UNREADABLE = Object.freeze({ kind: 'unreadable' }); // 一時的に読めない（書き換えと重なったときなど）。判断を次に回す
 
 function removeQuietly(remove, target) {
   try {
@@ -32,24 +41,26 @@ function removeQuietly(remove, target) {
   }
 }
 
-/** SpeechQueue.#stopPrevious() の結果 */
-const StopResult = Object.freeze({
-  STOPPED: 'stopped', // 止めた（または、もう終わっていた）
-  NOT_OWNER: 'not-owner', // PID が読み上げのプロセスではなかった（使い回し）→ 持ち主のいないロックとして片付ける
-  KILL_FAILED: 'kill-failed', // 止められなかった → ロックは残して試し直す
-  QUERY_FAILED: 'query-failed', // 止めてよいかを確かめられなかった → ロックは残して読み上げをあきらめる
-});
-
 /**
  * mkdir ロックによる排他制御
  *
+ * 持ち主（ロックを取った読み上げ）:
+ *   ロックを持っている間、state に { requestId, session, beatAt } を書き、HEARTBEAT_INTERVAL_MS ごとに beatAt を書き直す。
+ *   書き直す前に、state がまだ自分のものかを確かめる。自分のものでなければ（合図が途切れた間に片付けられ、
+ *   ほかのタブに取られた場合など）、ロックを失ったとして自分の声を止めて終わる。
+ *
  * 同じセッション（同じタブ）:
- *   前の読み上げプロセスに SIGTERM を送って差し替える（Windows では taskkill で子プロセスごと止める）。
+ *   新しい要求は latest-<タブ> に自分の番号を書き、ロックが空くのを待つ。前の読み上げのプロセスは止めない。
+ *   読んでいる本人が startWatching() で latest-<タブ> を見張り、自分の番号でなくなったら自分の声を止めてロックを返す。
  *   待っている間に同じタブから新しい返事が来たら、読まずに終了する。
- *   Windows で前の読み上げを止めてよいか確かめられないとき、または止められないときは、ロックを残して読まずに終了する。
+ *   持ち主が合図を書いているのに SAME_TAB_GIVE_UP_MS たってもロックを返さないときは、読まずに終了する（相手は止めない）。
  *
  * 別セッション（別タブ）:
  *   ロックが解放されるまで順番待ちする。
+ *
+ * 持ち主のいないロック:
+ *   合図が STALE_AFTER_MS より古いとき（state がないときは、ロックのフォルダができてから NO_STATE_GRACE_MS たったとき）、
+ *   持ち主がいないとみなして片付ける。消す直前に読み直し、判定に使ったときと同じときだけ消す（#removeIfUnchanged）。
  */
 class SpeechQueue {
   static MAX_RETRIES = 10;
@@ -58,10 +69,12 @@ class SpeechQueue {
   #workDir;
   #lockDir;
   #stateFile;
+  #stateTmp;
   #locked = false;
   #requestId = crypto.randomUUID();
   #latestPath;
   #retries = 0;
+  #watchTimer = null;
 
   /**
    * @param {string} sessionId セッション番号（同じタブかどうかの判定に使う）
@@ -72,6 +85,7 @@ class SpeechQueue {
     this.#workDir = workDir;
     this.#lockDir = path.join(workDir, 'lock');
     this.#stateFile = path.join(workDir, 'state');
+    this.#stateTmp = `${this.#stateFile}.tmp.${process.pid}`;
     const sessionHash = crypto.createHash('sha256').update(sessionId).digest('hex').slice(0, 16);
     this.#latestPath = path.join(workDir, `latest-${sessionHash}`);
   }
@@ -79,36 +93,40 @@ class SpeechQueue {
   /**
    * ロックを取得する。次のときは false を返す。
    *   - 同じタブの新しい返事に追い越された
-   *   - 前の読み上げを止めてよいか確かめられなかった、または止められなかった（ロックは残す）
-   *   - 試し直しが MAX_RETRIES 回を超えた
+   *   - 同じタブの持ち主が、合図を書いているのに SAME_TAB_GIVE_UP_MS たってもロックを返さなかった
+   *   - ロックの片付けや state の書き込みの試し直しが MAX_RETRIES 回を超えた
    */
   async acquire() {
     fs.mkdirSync(this.#workDir, { recursive: true });
     this.#registerRequest();
+    let sameTabSince = null;
     while (this.#isLatestRequest()) {
       try {
         fs.mkdirSync(this.#lockDir);
       } catch (err) {
         if (err.code !== 'EEXIST') throw err;
-        const { pid, session } = this.#readState();
-        // 状態を読んだあとに確かめ直す。同じタブの新しい返事がもうロックを取っていたら、それを止めずに終わる
+        const snapshot = this.#inspectLock();
+        if (snapshot === null) continue; // 調べる前に返された。すぐ取り直す
+        // 状態を読んだあとに確かめ直す。同じタブの新しい返事がもうロックを取っていたら、それを待たずに終わる
         if (!this.#isLatestRequest()) return false;
-        if (this.#isStale(pid)) {
+        if (this.#isStale(snapshot)) {
           if (!this.#countRetry()) return false;
-          this.#cleanupLock();
-          await sleep(100);
-        } else if (session === this.#sessionId) {
-          const result = await SpeechQueue.#stopPrevious(pid);
-          if (result === StopResult.QUERY_FAILED) return false; // 止めてよいか分からないので、ロックは残す
-          if (result === StopResult.NOT_OWNER || result === StopResult.KILL_FAILED) {
-            if (!this.#countRetry()) return false;
-            // 持ち主でなければロックを片付ける。止められなかったときは、ロックを残したまま試し直す
-            if (result === StopResult.NOT_OWNER) this.#cleanupLock();
-            await sleep(100);
-          }
+          this.#removeIfUnchanged(snapshot);
+        } else if (snapshot.read.kind === 'present' && snapshot.read.state.session === this.#sessionId) {
+          // 同じタブ: 読んでいる本人が新しい要求に気づいて自分の声を止め、ロックを返すのを待つ
+          sameTabSince ??= Date.now();
+          if (Date.now() - sameTabSince > SAME_TAB_GIVE_UP_MS) return false;
         } else {
-          await sleep(STALE_CHECK_INTERVAL_MS);
+          sameTabSince = null;
         }
+        await sleep(POLL_INTERVAL_MS);
+        continue;
+      }
+      // 取ったらすぐに state（最初の合図）を書く。書けなければロックを返して試し直す
+      if (!this.#writeState()) {
+        removeQuietly(fs.rmdirSync, this.#lockDir);
+        if (!this.#countRetry()) return false;
+        await sleep(POLL_INTERVAL_MS);
         continue;
       }
       this.#locked = true;
@@ -117,16 +135,89 @@ class SpeechQueue {
         this.release();
         return false;
       }
-      this.#writeState();
       return true;
     }
     return false;
   }
 
+  /**
+   * 読んでいる間の見張りと、生存の合図の書き直しを始める。次のときに onStop(reason) を呼ぶ（理由ごとに1回だけ）。
+   *   'replaced'  同じタブの新しい要求が来た。合図は release() まで書き続ける
+   *               （声が止まらずにロックを返せないとき、合図が途切れて新しい要求に取られ、声が重なるのを防ぐ。
+   *                新しい要求は SAME_TAB_GIVE_UP_MS で読まずにあきらめる）
+   *   'lost'      ロックを失った（合図が途切れた間に片付けられた）。見張りも合図もやめ、ロックには触らずに終わる
+   * 呼ばれた側は自分の声を止める（声が止まれば読み上げが終わり、release() でロックが返る）。
+   */
+  startWatching(onStop) {
+    this.stopWatching();
+    let lastBeat = Date.now();
+    let replaced = false;
+    this.#watchTimer = setInterval(() => {
+      if (!replaced && !this.#isLatestRequest()) {
+        replaced = true;
+        onStop('replaced');
+      }
+      const now = Date.now();
+      if (now - lastBeat < HEARTBEAT_INTERVAL_MS) return;
+      const owns = this.#ownsLock();
+      if (owns === false) {
+        this.stopWatching();
+        this.#locked = false;
+        onStop('lost');
+        return;
+      }
+      // 一時的に読めない、または書けないときは、次の回に書き直す（STALE_AFTER_MS までに何度か試せる）
+      if (owns === true && this.#writeState()) lastBeat = now;
+    }, WATCH_INTERVAL_MS);
+  }
+
+  stopWatching() {
+    if (this.#watchTimer === null) return;
+    clearInterval(this.#watchTimer);
+    this.#watchTimer = null;
+  }
+
+  /**
+   * ロックを返す。state が自分のものだと確かめられたときだけ消す。
+   * 自分のものでないとき（ほかのタブに取られたとき）や、一時的に読めずに確かめられないときは、触らずに終わる。
+   * 確かめられないまま消すと、ほかのタブが取り直したロックを消してしまうおそれがあるため。
+   * 触らずに終わったロックが自分のものでも、合図が止まるので、STALE_AFTER_MS のあとにほかのタブが片付ける。
+   */
   release() {
+    this.stopWatching();
     if (!this.#locked) return;
-    this.#cleanupLock();
     this.#locked = false;
+    removeQuietly(fs.rmSync, this.#stateTmp);
+    if (this.#ownsLock() !== true) return;
+    removeQuietly(fs.rmSync, this.#stateFile);
+    removeQuietly(fs.rmdirSync, this.#lockDir);
+  }
+
+  /**
+   * タブごとの一時ファイルのうち、TEMP_MAX_AGE_MS より長く更新されていないものを片付ける（落ちたプロセスが残したものなど）。
+   * 読み上げの最後（読まずに終わるときも）に呼ぶ。
+   *
+   * 読み終わったときに自分の latest-<タブ> は消さない。消すと、同じタブで待っている古い要求が、
+   * latest-<タブ> がないことを「自分が最新」と受け取り、古い返事を読むおそれがあるため。
+   * latest-<タブ> も、ほかの一時ファイルと同じく、古くなったら片付ける。
+   */
+  cleanupTempFiles() {
+    let names;
+    try {
+      names = fs.readdirSync(this.#workDir);
+    } catch {
+      return;
+    }
+    const now = Date.now();
+    for (const name of names) {
+      if (!TEMP_FILE_PATTERN.test(name)) continue;
+      const file = path.join(this.#workDir, name);
+      try {
+        if (now - fs.statSync(file).mtimeMs > TEMP_MAX_AGE_MS) fs.rmSync(file, { force: true });
+      } catch {
+        // 消されたばかりなどは無視する
+      }
+    }
   }
 
   /** 試し直しを1回数える。MAX_RETRIES 回を超えたら false を返す（延々と続けないため）。 */
@@ -149,111 +240,101 @@ class SpeechQueue {
     }
   }
 
+  /** state（合図）を書く。一時ファイルに書いてから置き換えるので、途中の状態は読まれない。書けたら true。 */
   #writeState() {
-    const tmp = `${this.#stateFile}.tmp.${process.pid}`;
-    fs.writeFileSync(tmp, `${process.pid}:${this.#sessionId}`);
-    fs.renameSync(tmp, this.#stateFile);
-  }
-
-  /** { pid, session } を返す。読めない場合はどちらも null。 */
-  #readState() {
     try {
-      const content = fs.readFileSync(this.#stateFile, 'utf8').trim();
-      const sep = content.indexOf(':');
-      const pidStr = sep === -1 ? '' : content.slice(0, sep);
-      // 0 や負の PID はプロセスグループ宛てになるため、壊れた state として扱う
-      if (!/^\d+$/.test(pidStr) || Number(pidStr) === 0) return { pid: null, session: null };
-      return { pid: Number(pidStr), session: content.slice(sep + 1) };
+      fs.writeFileSync(this.#stateTmp, JSON.stringify({ requestId: this.#requestId, session: this.#sessionId, beatAt: Date.now() }));
+      fs.renameSync(this.#stateTmp, this.#stateFile);
+      return true;
     } catch {
-      return { pid: null, session: null };
+      removeQuietly(fs.rmSync, this.#stateTmp);
+      return false;
     }
-  }
-
-  #isStale(pid) {
-    if (pid === null) {
-      // mkdir 直後で state がまだ書かれていない場合があるため、猶予を置く
-      try {
-        return Date.now() - fs.statSync(this.#lockDir).ctimeMs > 5000;
-      } catch {
-        return true;
-      }
-    }
-    return !isProcessAlive(pid);
   }
 
   /**
-   * 前の読み上げを止め、プロセスが終わるまで最大2秒待つ。結果は StopResult で返す。
-   * 2秒待っても終わらなければ KILL_FAILED を返す。
-   *
-   * Windows では process.kill() が SIGTERM でも即座に終了させるため、前のプロセスの後片付け
-   * （子の PowerShell を止める、ロックを解放する）が動かない。そこで taskkill で子プロセスごと止める。
-   * 子プロセスごと止めるので、その前に PID が node.exe のものかを確かめ、違えば止めない。
-   * 止めたあとに残ったロックは、acquire() の次のループで「持ち主のいないロック」として片付く。
+   * state を読む。
+   *   { kind: 'present', state }  持ち主の { requestId, session, beatAt }
+   *   ABSENT                      ない、または読めない形
+   *   UNREADABLE                  一時的に読めない
    */
-  static async #stopPrevious(pid) {
-    if (process.platform === 'win32') {
-      const isNode = await SpeechQueue.#isNodeProcessOnWindows(pid);
-      if (isNode === null) return StopResult.QUERY_FAILED;
-      if (!isNode) return StopResult.NOT_OWNER;
-      // taskkill が失敗しても、その間に終わっていれば止める必要はない（ロックは次のループで片付く）
-      if (!(await SpeechQueue.#killProcessTreeOnWindows(pid)) && isProcessAlive(pid)) return StopResult.KILL_FAILED;
-    } else {
-      try {
-        process.kill(pid, 'SIGTERM');
-      } catch (err) {
-        // ESRCH はもう終わっている。EPERM など止められなかったときは、試し直しの回数に数えさせる（MAX_RETRIES で打ち切る）
-        return err.code === 'ESRCH' ? StopResult.STOPPED : StopResult.KILL_FAILED;
+  #readState() {
+    let text;
+    try {
+      text = fs.readFileSync(this.#stateFile, 'utf8');
+    } catch (err) {
+      return err.code === 'ENOENT' ? ABSENT : UNREADABLE;
+    }
+    try {
+      const state = JSON.parse(text);
+      if (state && typeof state.requestId === 'string' && typeof state.session === 'string' && Number.isFinite(state.beatAt)) {
+        return { kind: 'present', state };
       }
+    } catch {
+      // 読めない形（古い版の「PID:セッション」形式など）は、ないものとして扱う
     }
-    for (let i = 0; i < 20; i++) {
-      if (!isProcessAlive(pid)) return StopResult.STOPPED;
-      await sleep(100);
-    }
-    // 2秒待っても終わらなければ止められなかったとみなし、試し直しの回数に数えさせる（MAX_RETRIES で打ち切る）
-    return StopResult.KILL_FAILED;
+    return ABSENT;
+  }
+
+  /** state が自分のものか。true: 自分のもの / false: ない、またはほかの要求のもの / null: 一時的に読めない */
+  #ownsLock() {
+    const read = this.#readState();
+    if (read.kind === 'unreadable') return null;
+    return read.kind === 'present' && read.state.requestId === this.#requestId;
   }
 
   /**
-   * その PID のプロセスが node.exe かを tasklist で確かめる。
-   *   true:  node.exe
-   *   false: 別のプロセス、または、もういない
-   *   null:  照会に失敗した（起動できない、終了コードが0以外、出力を読めない）
+   * 今のロックの様子を読む。ロックがなければ null。
+   *   dirId    ロックのフォルダの身元（作り直されたかを見分ける。state がないときの判定に使う）
+   *   ctimeMs  ロックのフォルダができた時刻（state がないときの猶予に使う）
+   *   read     #readState() の結果
+   * フォルダを一時的に調べられないときは、read を UNREADABLE にして、判断を次の確認に回す。
    */
-  static #isNodeProcessOnWindows(pid) {
-    return new Promise((resolve) => {
-      const proc = spawn(WIN_TASKLIST, ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH'], {
-        stdio: ['ignore', 'pipe', 'ignore'],
-        windowsHide: true,
-      });
-      let output = '';
-      proc.stdout?.on('data', (chunk) => {
-        output += chunk.toString('latin1'); // 見るのは ASCII のイメージ名と PID だけなので、文字コードは問わない
-      });
-      proc.on('error', () => resolve(null));
-      proc.on('close', (code) => {
-        if (code !== 0) return resolve(null);
-        // 例: "node.exe","1234","Console","1","45,678 K"
-        const row = /^"([^"]*)","(\d+)"/m.exec(output);
-        if (row) return resolve(Number(row[2]) === pid ? row[1].toLowerCase() === 'node.exe' : null);
-        // 一覧に出ないとき、tasklist は案内の文（言語によって違う）だけを出す。
-        // プロセスがもういなければ「別のプロセス」と同じ扱い。いるのに出てこないなら、出力を読めなかったとみなす
-        return resolve(isProcessAlive(pid) ? null : false);
-      });
-    });
+  #inspectLock() {
+    let stat;
+    try {
+      stat = fs.statSync(this.#lockDir, { bigint: true });
+    } catch (err) {
+      if (err.code === 'ENOENT') return null;
+      return { dirId: null, ctimeMs: Date.now(), read: UNREADABLE };
+    }
+    return { dirId: `${stat.ino}:${stat.birthtimeNs}`, ctimeMs: Number(stat.ctimeMs), read: this.#readState() };
   }
 
-  /** taskkill で子プロセスごと止める。終了コードが0のときだけ true（起動できない、0以外は false） */
-  static #killProcessTreeOnWindows(pid) {
-    return new Promise((resolve) => {
-      const proc = spawn(WIN_TASKKILL, ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
-      proc.on('error', () => resolve(false));
-      proc.on('close', (code) => resolve(code === 0));
-    });
+  /** 持ち主がいないロックか。一時的に state を読めないときは、判断を次の確認に回す（false）。 */
+  #isStale(snapshot) {
+    const now = Date.now();
+    switch (snapshot.read.kind) {
+      case 'present':
+        return now - snapshot.read.state.beatAt > STALE_AFTER_MS;
+      case 'absent':
+        return now - snapshot.ctimeMs > NO_STATE_GRACE_MS;
+      default:
+        return false;
+    }
   }
 
-  #cleanupLock() {
+  /**
+   * 持ち主がいないと判定したロックを片付ける。消す直前に読み直し、判定に使ったときと同じときだけ消す。
+   *   合図が古かった（state があった）:
+   *     読み直した state が、同じ要求の同じ合図のときだけ消す。state がなくなっていたら消さない
+   *     （別のタブが片付けて取り直した直後で、まだ state を書いていない場合があるため）
+   *   state がないまま猶予が切れた:
+   *     まだ state がなく、ロックのフォルダが作り直されていない（身元が同じ）ときだけ消す
+   *     （state がないことだけで「違う持ち主」とすると、state を書く前に落ちた持ち主のロックがいつまでも残るため）
+   */
+  #removeIfUnchanged(snapshot) {
+    const current = this.#inspectLock();
+    if (current === null) return;
+    if (snapshot.read.kind === 'present') {
+      if (current.read.kind !== 'present') return;
+      const judged = snapshot.read.state;
+      const now = current.read.state;
+      if (now.requestId !== judged.requestId || now.beatAt !== judged.beatAt) return;
+    } else if (current.read.kind !== 'absent' || current.dirId !== snapshot.dirId) {
+      return;
+    }
     removeQuietly(fs.rmSync, this.#stateFile);
-    removeQuietly(fs.rmSync, `${this.#stateFile}.tmp.${process.pid}`);
     removeQuietly(fs.rmdirSync, this.#lockDir);
   }
 }

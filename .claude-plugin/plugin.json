@@ -1,6 +1,6 @@
 {
   "name": "voice-reply",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Claude Code の返事を OS 標準の声で読み上げる（Mac は say、Windows は SAPI）",
   "author": {
     "name": "mg1986jp",
