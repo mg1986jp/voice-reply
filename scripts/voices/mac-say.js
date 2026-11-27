@@ -12,6 +12,18 @@ const { spawn } = require('node:child_process');
 const DEFAULT_VOICE = 'Kyoko';
 const DEFAULT_RATE = 260; // say -r の値（1分あたりの語数）
 
+/**
+ * -r 260（初期値）のときに、1 秒に読む文字数。
+ * Kyoko で本物の返事の要約を測ると約 8.3 文字（一番遅いもので 7.78 文字）だった。上限を長めに見積もる向きに、少し小さい 8 にする。
+ */
+const CHARS_PER_SECOND_AT_DEFAULT_RATE = 8;
+/**
+ * これより大きい -r を指定しても、声は速くならない（Kyoko で測ると、-r 200〜700 では速さが -r にほぼ比例し、770 より上は頭打ちだった）。
+ * 見積もりもここで頭打ちにする。頭打ちにしないと、770 より上の -r で実際より速く見積もり、上限が短くなりすぎて、ふつうの読み上げを途中で止めてしまう。
+ * なお -r 200 より下は、設定ほど遅くならない（実際は見積もりより速く読み終わる）ので、比例のまま見積もっても上限が短くなる向きにはずれない。
+ */
+const MAX_EFFECTIVE_RATE = 770;
+
 /** say -r に渡す速さ。正の整数でなければ初期値を使う。 */
 function parseRate(value) {
   const rate = Number.parseInt(value ?? '', 10);
@@ -45,6 +57,14 @@ class MacSay {
     if (this.#proc && this.#proc.exitCode === null && this.#proc.signalCode === null) {
       this.#proc.kill('SIGKILL');
     }
+  }
+
+  /**
+   * 1 秒に読む文字数（速さの設定から見積もる）。-r にほぼ比例し、MAX_EFFECTIVE_RATE で頭打ちにする。
+   * Kyoko で測った値なので、CLAUDE_SAY_VOICE でほかの声にしたときは、実際の速さとずれることがある。
+   */
+  charsPerSecond() {
+    return (CHARS_PER_SECOND_AT_DEFAULT_RATE * Math.min(this.#rate, MAX_EFFECTIVE_RATE)) / DEFAULT_RATE;
   }
 }
 

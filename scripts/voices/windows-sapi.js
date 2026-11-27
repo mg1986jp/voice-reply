@@ -16,6 +16,14 @@ const DEFAULT_RATE = 3; // System.Speech の Rate（0 が標準の速さ。3 で
 const RATE_MIN = -10;
 const RATE_MAX = 10;
 
+/**
+ * Rate 3（初期値）のときに、1 秒に読む文字数。
+ * Haruka で本物の返事の要約 14 件を測ると 7.91〜9.09 文字（中央値 8.36）だった。上限を長めに見積もる向きに、少し小さい 8 にする。
+ */
+const CHARS_PER_SECOND_AT_DEFAULT_RATE = 8;
+/** Rate を 1 上げるごとに、1 秒に読む文字数が何倍になるか（Haruka で Rate -10〜10 を測った値） */
+const SPEED_STEP = 1.116;
+
 /** System.Speech の Rate に渡す速さ。-10〜10 の整数でなければ初期値を使う。 */
 function parseRate(value) {
   const rate = Number.parseInt(value ?? '', 10);
@@ -83,6 +91,15 @@ class WindowsSapi {
     if (this.#proc && this.#proc.exitCode === null && this.#proc.signalCode === null) {
       this.#proc.kill();
     }
+  }
+
+  /**
+   * 1 秒に読む文字数（速さの設定から見積もる）。
+   * Haruka で測った値なので、ほかの日本語の声に切り替わったときは、実際の速さとずれることがある
+   * （読み上げの時間の上限は、見積もりの 2.5 倍に 30 秒を足すので、2.5 倍までの遅さなら上限に届かない）。
+   */
+  charsPerSecond() {
+    return CHARS_PER_SECOND_AT_DEFAULT_RATE * SPEED_STEP ** (this.#rate - DEFAULT_RATE);
   }
 }
 
