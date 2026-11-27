@@ -38,12 +38,14 @@ function parseEngine(value) {
 /**
  * AivisSpeech で読み、1 文目を鳴らし始める前に失敗したら、OS の声で全部読み直す。
  * 読んでいる途中で失敗したときは、読み直さずにそこでやめる（同じところを2回聞かせないため）。
+ *
+ * kill() は、そのときに読んでいる方の声を止める。AivisSpeech を止めたあとは、AivisSpeech の結果は STOPPED になるので、
+ * OS の声に切り替わることはない。OS の声に切り替えるときは、切り替えと読み始めを続けて行う（その間に kill() は入らない）。
  */
 class AivisSpeechWithFallback {
   #aivis;
   #osVoice;
   #current;
-  #killed = false;
 
   constructor(aivis, osVoice) {
     this.#aivis = aivis;
@@ -53,13 +55,12 @@ class AivisSpeechWithFallback {
 
   async speak(text, options) {
     const outcome = await this.#aivis.speak(text, options);
-    if (outcome !== aivisspeech.SpeakOutcome.FAILED_BEFORE_START || this.#killed) return;
+    if (outcome !== aivisspeech.SpeakOutcome.FAILED_BEFORE_START) return;
     this.#current = this.#osVoice;
     await this.#osVoice.speak(text, options);
   }
 
   kill() {
-    this.#killed = true;
     this.#current.kill();
   }
 }

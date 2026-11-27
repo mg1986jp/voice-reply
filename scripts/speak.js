@@ -112,8 +112,9 @@ async function main() {
     if (!isEnabled(dataDir)) return;
     // 同じタブの新しい返事が来たとき、またはロックを失ったとき（合図が途切れた間にほかのタブに取られたとき）は、自分の声を止める
     queue.startWatching(stopVoice);
+    // 読み上げが動く OS であることは確かめてあるので、ここで声が見つからないことはない
     voice = await chooseVoice();
-    if (!voice || stopped) return;
+    if (stopped) return;
     // 時間の上限は、声が区切り（OS の声は全体、AivisSpeech は文）に取りかかるたびに、その区切りの文字数と、
     // その区切りを読む声の速さから決め直す（AivisSpeech から OS の声に切り替わったときは、OS の声の速さで決める）。
     // 順番待ちの時間は数えない。速さを見積もれない声では上限を設けない

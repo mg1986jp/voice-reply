@@ -31,7 +31,10 @@ function countChars(text) {
   return [...text].length;
 }
 
-/** 細かく分けたものを、maxChars を超えない範囲で前から順につなぎ直す */
+/**
+ * 細かく分けたものを、maxChars を超えない範囲で前から順につなぎ直す。
+ * pieces は、空でない文を記号や空白のあとで分けたもので、どれも空ではない（前から読む区切りは文の頭にはこないため）
+ */
 function pack(pieces, maxChars) {
   const packed = [];
   let current = '';
@@ -42,7 +45,7 @@ function pack(pieces, maxChars) {
     }
     current += piece;
   }
-  if (current !== '') packed.push(current);
+  packed.push(current);
   return packed;
 }
 

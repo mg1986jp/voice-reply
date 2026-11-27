@@ -76,16 +76,16 @@ function parseStyleId(value) {
   return /^-?\d+$/.test(text) && Number.isSafeInteger(id) ? id : DEFAULT_STYLE_ID;
 }
 
-/** speedScale。SPEED_MIN〜SPEED_MAX の数でなければ初期値を使う */
+/** speedScale。SPEED_MIN〜SPEED_MAX の数でなければ初期値を使う（設定がないときは NaN になり、初期値を使う） */
 function parseSpeed(value) {
-  const speed = Number.parseFloat(value ?? '');
+  const speed = Number.parseFloat(value);
   return Number.isFinite(speed) && speed >= SPEED_MIN && speed <= SPEED_MAX ? speed : DEFAULT_SPEED;
 }
 
-/** エンジンの URL（末尾の / を除く）。http か https の URL でなければ初期値を使う */
+/** エンジンの URL（末尾の / を除く）。http か https の URL でなければ初期値を使う（設定がないときは URL として読めず、初期値を使う） */
 function parseUrl(value) {
   try {
-    const { protocol } = new URL(value ?? '');
+    const { protocol } = new URL(value);
     if (protocol === 'http:' || protocol === 'https:') return value.replace(/\/+$/, '');
   } catch {
     // URL として読めないときは初期値を使う
@@ -122,13 +122,13 @@ function removeFile(file) {
   }
 }
 
-/** HTTP の要求を送る。応答が 2xx でなければ、本文を読み捨ててから例外を投げる */
+/**
+ * HTTP の要求を送る。応答が 2xx でなければ例外を投げる。
+ * 失敗の応答の本文は読まない（speak() の終わりに AbortController で要求ごと取りやめるので、接続は残らない）
+ */
 async function request(url, init) {
   const response = await fetch(url, init);
-  if (!response.ok) {
-    await response.arrayBuffer().catch(() => {});
-    throw new Error(`AivisSpeech Engine responded ${response.status}`);
-  }
+  if (!response.ok) throw new Error(`AivisSpeech Engine responded ${response.status}`);
   return response;
 }
 
@@ -199,7 +199,6 @@ class AivisSpeech {
         if (this.#killed) return SpeakOutcome.STOPPED;
         if (!played) return SpeakOutcome.FAILED;
       }
-      return SpeakOutcome.FINISHED;
     } catch {
       // 声の一覧を取れなかったときなど
       return this.#killed ? SpeakOutcome.STOPPED : failed();
@@ -209,6 +208,7 @@ class AivisSpeech {
       // 作りかけの文は、取りやめたあとに終わるのを待ってから、できていた WAV を消す（#prepare() は reject しない）
       if (next !== null) removeFile((await next).file);
     }
+    return SpeakOutcome.FINISHED;
   }
 
   /** 読み上げを即座に止める（鳴らしている子プロセスを止め、作りかけの文の HTTP の要求を取りやめる） */
