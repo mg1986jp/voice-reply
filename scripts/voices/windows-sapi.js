@@ -96,7 +96,7 @@ class WindowsSapi {
   /**
    * 1 秒に読む文字数（速さの設定から見積もる）。
    * Haruka で測った値なので、ほかの日本語の声に切り替わったときは、実際の速さとずれることがある
-   * （読み上げの時間の上限は、見積もりの 2 倍に 30 秒を足すので、2 倍までの遅さなら上限に届かない）。
+   * （読み上げの時間の上限は、見積もりの 2.5 倍に 30 秒を足すので、2.5 倍までの遅さなら上限に届かない）。
    */
   charsPerSecond() {
     return CHARS_PER_SECOND_AT_DEFAULT_RATE * SPEED_STEP ** (this.#rate - DEFAULT_RATE);
