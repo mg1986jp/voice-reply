@@ -64,7 +64,9 @@ test('順番待ちの間にオフにされた返事は、順番が来ても読�
   t.after(() => clearInterval(beat));
 
   const waiting = runSpeak(env, 'tab-B', '待っている返事', 300);
-  await h.sleep(800); // 別のタブが読んでいる間、順番を待っている
+  // 要求が登録されてから（順番待ちに入ってから）オフにする。起動が遅くても、順番待ちを経ずに通ってしまわないように
+  await h.waitFor(() => fs.existsSync(h.latestFile(env.workDir, 'tab-B')), 5000, '待っている要求が登録される');
+  assert.equal(has(env.voiceDir, waiting.pid, 'started'), false, '別のタブが読んでいる間は読み始めない');
   fs.writeFileSync(path.join(env.dataDir, 'disabled'), '');
   clearInterval(beat);
   fs.rmSync(h.stateFile(env.workDir));
