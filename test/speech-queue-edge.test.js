@@ -203,9 +203,13 @@ test('ロックを取ろうとして調べる前に返されていたら、す�
   t.after(restore);
 
   const queue = new SpeechQueue('tab-B', workDir);
-  const started = Date.now();
-  assert.equal(await queue.acquire(), true);
-  assert.ok(Date.now() - started < 300, '待たずに取り直す');
+  const acquired = queue.acquire();
+  try {
+    // 待たずに取り直すなら、acquire() が最初に待つより前に state を書き終えている（0.15 秒待つ実装では、まだ書かれていない）
+    assert.equal(h.readState(workDir).session, 'tab-B', '待つ前に取り直す');
+  } finally {
+    assert.equal(await acquired, true);
+  }
   restore();
   queue.release();
 });
