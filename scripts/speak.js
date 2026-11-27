@@ -11,12 +11,13 @@
  *   同じタブ（同一セッション）→ 読んでいる本人が新しい返事に気づいて自分の声を止め、新しい方に差し替え
  *   別のタブ（別セッション）→ 順番待ち
  *   ほかのプロセスは止めない（手動の say なども一切触らない）
+ *   1 回の読み上げには、文字数と声の速さから決めた時間の上限があり、超えたら自分の声を止める
  *   自分の声を止めても読み上げが終わらないときは、少し待って、ロックを返して終わる
  *
  * 構成:
  *   lib/text.js          読む文章を作る（OS 非依存）
  *   lib/speech-queue.js  mkdir ベースの排他制御（OS 非依存）
- *   lib/speech-limit.js  読み上げを止めるときの時間の決まり（OS 非依存）
+ *   lib/speech-limit.js  読み上げの時間の上限と、止めるときの時間の決まり（OS 非依存）
  *   voices/              声ごとの読み上げ処理と、OS に合う声の選択
  *
  * 読み上げがオフ（/voice-reply:toggle off）のときは、何もせずにすぐ終わる。
@@ -31,7 +32,7 @@ const path = require('node:path');
 const { buildSpeechText, extractLastTurnText } = require('./lib/text');
 const { SpeechQueue } = require('./lib/speech-queue');
 const { getDataDir, getWorkDir } = require('./lib/paths');
-const { STOP_GRACE_MS } = require('./lib/speech-limit');
+const { voiceTimeLimitMs, STOP_GRACE_MS } = require('./lib/speech-limit');
 const { isEnabled } = require('./lib/state');
 const { getVoice } = require('./voices');
 
@@ -91,6 +92,7 @@ async function main() {
     graceTimer ??= setTimeout(finishNow, STOP_GRACE_MS).unref();
   };
 
+  let limitTimer = null;
   try {
     if (!(await queue.acquire())) return;
     // 順番待ちのあいだにオフにされていたら、読まずに終わる（ロックは finally で返す）。
@@ -98,8 +100,13 @@ async function main() {
     if (!isEnabled(dataDir)) return;
     // 同じタブの新しい返事が来たとき、またはロックを失ったとき（合図が途切れた間にほかのタブに取られたとき）は、自分の声を止める
     queue.startWatching(stopVoice);
+    // 読み上げが時間の上限を超えたら、自分の声を止める（声だけが固まったときに、ほかのタブを待たせ続けないため）。
+    // 上限は文字数と声の速さから決め、順番待ちの時間は数えない。速さを見積もれない声では上限を設けない
+    const limitMs = voiceTimeLimitMs(voice, speechText);
+    limitTimer = limitMs === null ? null : setTimeout(stopVoice, limitMs);
     await voice.speak(speechText);
   } finally {
+    clearTimeout(limitTimer);
     clearTimeout(graceTimer);
     queue.release();
     queue.cleanupTempFiles();
