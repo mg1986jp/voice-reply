@@ -19,7 +19,7 @@
  *
  * 読み上げがオフ（/voice-reply:toggle off）のときは、何もせずにすぐ終わる。
  * 順番待ちのあいだにオフにされたときも、順番が来た時点で確かめ直して、読まずに終わる。
- * 一時ファイルはプラグインのデータフォルダ（CLAUDE_PLUGIN_DATA）の tmp/ に置く。
+ * 一時ファイルはプラグインのデータフォルダ（CLAUDE_PLUGIN_DATA）の tmp/ に置き、読み上げの最後に片付ける。
  * 声と速さの設定は voices/ の各ファイルを参照。Node の標準モジュールだけで動く（npm パッケージ不要）。
  */
 'use strict';
@@ -67,10 +67,11 @@ async function main() {
   if (!voice) return;
   const queue = new SpeechQueue(sessionId, getWorkDir(dataDir));
 
-  // process.exit() は finally を飛ばすため、ロック解放は必ずその直前で行う
+  // process.exit() は finally を飛ばすため、ロック解放と後片付けは必ずその直前で行う
   const handleSignal = () => {
     voice.kill();
     queue.release();
+    queue.cleanupTempFiles();
     process.exit(0);
   };
   process.on('SIGTERM', handleSignal);
@@ -87,6 +88,7 @@ async function main() {
     await voice.speak(speechText);
   } finally {
     queue.release();
+    queue.cleanupTempFiles();
   }
 }
 

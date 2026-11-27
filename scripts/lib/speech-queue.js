@@ -24,6 +24,10 @@ const STALE_AFTER_MS = 3000;
 const NO_STATE_GRACE_MS = 5000;
 /** 同じタブの持ち主が、合図を書いているのにロックを返さないとき、待つのをあきらめるまでの時間 */
 const SAME_TAB_GIVE_UP_MS = 5000;
+/** これより長く更新されていない、タブごとの一時ファイルは片付ける */
+const TEMP_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+/** 片付けの対象: latest-<タブ>、その書きかけ（latest-<タブ>.<PID>）、state の書きかけ（state.tmp.<PID>）。lock と state は対象外 */
+const TEMP_FILE_PATTERN = /^(?:latest-[0-9a-f]{16}(?:\.\d+)?|state\.tmp\.\d+)$/;
 
 /** #readState() の結果 */
 const ABSENT = Object.freeze({ kind: 'absent' }); // state がない、または読めない形（書く前、古い版の形式など）
@@ -179,6 +183,36 @@ class SpeechQueue {
     if (this.#ownsLock() === false) return;
     removeQuietly(fs.rmSync, this.#stateFile);
     removeQuietly(fs.rmdirSync, this.#lockDir);
+  }
+
+  /**
+   * タブごとの一時ファイルを片付ける。読み上げの最後（読まずに終わるときも）に呼ぶ。
+   *   - 自分の latest-<タブ>: まだ自分の番号なら消す（同じタブの新しい要求が書いていれば残す）
+   *   - 古い一時ファイル: TEMP_MAX_AGE_MS より長く更新されていないものを消す（落ちたプロセスが残したものなど）
+   * latest-<タブ> がないときは「自分が最新」として扱うので、使っているタブのものを消しても動きは壊れない。
+   */
+  cleanupTempFiles() {
+    try {
+      if (fs.readFileSync(this.#latestPath, 'utf8').trim() === this.#requestId) fs.rmSync(this.#latestPath, { force: true });
+    } catch {
+      // ない、または読めないときは何もしない
+    }
+    let names;
+    try {
+      names = fs.readdirSync(this.#workDir);
+    } catch {
+      return;
+    }
+    const now = Date.now();
+    for (const name of names) {
+      if (!TEMP_FILE_PATTERN.test(name)) continue;
+      const file = path.join(this.#workDir, name);
+      try {
+        if (now - fs.statSync(file).mtimeMs > TEMP_MAX_AGE_MS) fs.rmSync(file, { force: true });
+      } catch {
+        // 消されたばかりなどは無視する
+      }
+    }
   }
 
   /** 試し直しを1回数える。MAX_RETRIES 回を超えたら false を返す（延々と続けないため）。 */
