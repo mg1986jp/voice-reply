@@ -75,8 +75,13 @@ class SpeechLimitTimer {
     if (limitMs !== null) this.#timer = setTimeout(this.#onExpire, limitMs);
   }
 
+  /**
+   * 測るのをやめる。タイマーがないときは clearTimeout() を呼ばない。
+   * clearTimeout(null) は、本物のタイマーでは何もしない。ところが Node のモックの時計（テストで使う）は、
+   * 20.17.0・22.6.0 より前の版では、TypeError を投げたり、待っているタイマーの並びを崩したりする
+   */
   clear() {
-    clearTimeout(this.#timer);
+    if (this.#timer !== null) clearTimeout(this.#timer);
     this.#timer = null;
   }
 }

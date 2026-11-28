@@ -92,3 +92,20 @@ test('SpeechLimitTimer は clear() で止め、restart(null) では測らない�
     assert.equal(expired, 0, label);
   }
 });
+
+// モックの時計は、20.17.0・22.6.0 より前の版では、止めるタイマーがない clearTimeout() で TypeError を投げたり、
+// 待っているタイマーの並びを崩したりする。直った版で動かしても気づけるように、clearTimeout() を呼んだ数を直接数える
+test('SpeechLimitTimer は、測っているときだけ clearTimeout() を呼ぶ（測っていないときの clear() や restart() では呼ばない）', (t) => {
+  const clearTimeoutMock = t.mock.method(globalThis, 'clearTimeout');
+  const timer = new SpeechLimitTimer(() => {});
+
+  timer.clear();
+  timer.restart(null);
+  timer.restart(60000);
+  assert.equal(clearTimeoutMock.mock.callCount(), 0, '測っていないときは呼ばない');
+  timer.clear();
+  assert.equal(clearTimeoutMock.mock.callCount(), 1, '測っているときは呼ぶ');
+  assert.notEqual(clearTimeoutMock.mock.calls[0].arguments[0], null, '測っているタイマーを渡す');
+  timer.clear();
+  assert.equal(clearTimeoutMock.mock.callCount(), 1, '止めたあとは、もう呼ばない');
+});
