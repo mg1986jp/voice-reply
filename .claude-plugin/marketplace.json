@@ -9,7 +9,7 @@
     {
       "name": "voice-reply",
       "source": "./",
-      "description": "Claude Code の返事を OS 標準の声で読み上げる（Mac は say、Windows は SAPI）"
+      "description": "Claude Code の返事を声で読み上げる（AivisSpeech Engine が動いていればその声、なければ OS 標準の声）"
     }
   ]
 }

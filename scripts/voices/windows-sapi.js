@@ -2,9 +2,9 @@
  * 声: Windows の SAPI の声（Windows PowerShell 5.1 の System.Speech で読む）
  *
  * 設定（環境変数）:
- *   CLAUDE_SAY_VOICE     声の名前（初期値: Microsoft Haruka Desktop）
- *                        指定した声が入っていなければ、日本語の声に切り替える
- *   CLAUDE_SAY_WIN_RATE  速さ（System.Speech の Rate。-10〜10 の整数、初期値 3 ≒ 標準の約1.4倍）
+ *   VOICE_REPLY_WIN_VOICE  声の名前（初期値: Microsoft Haruka Desktop）
+ *                          指定した声が入っていなければ、日本語の声に切り替える
+ *   VOICE_REPLY_WIN_RATE   速さ（System.Speech の Rate。-10〜10 の整数、初期値 3 ≒ 標準の約1.4倍）
  */
 'use strict';
 
@@ -50,9 +50,9 @@ $synth = New-Object System.Speech.Synthesis.SpeechSynthesizer
 try {
   $voices = @($synth.GetInstalledVoices() | Where-Object { $_.Enabled } | ForEach-Object { $_.VoiceInfo })
   $japanese = @($voices | Where-Object { $_.Culture.Name -eq 'ja-JP' })
-  $candidates = @($voices | Where-Object { $_.Name -eq $env:CLAUDE_SAY_SAPI_VOICE }) + @($japanese | Where-Object { $_.Gender -eq 'Female' }) + $japanese
+  $candidates = @($voices | Where-Object { $_.Name -eq $env:VOICE_REPLY_SAPI_VOICE }) + @($japanese | Where-Object { $_.Gender -eq 'Female' }) + $japanese
   if ($candidates.Count -gt 0) { $synth.SelectVoice($candidates[0].Name) }
-  $synth.Rate = [int]$env:CLAUDE_SAY_SAPI_RATE
+  $synth.Rate = [int]$env:VOICE_REPLY_SAPI_RATE
   $synth.SetOutputToDefaultAudioDevice()
   $synth.Speak($text)
 } finally {
@@ -71,13 +71,15 @@ class WindowsSapi {
     this.#rate = rate;
   }
 
-  speak(text) {
+  speak(text, { onSegment = () => {} } = {}) {
+    // 全体を1つの区切りとして読む（読み上げの時間の上限は、全体に1つ）
+    onSegment(text, this);
     return new Promise((resolve) => {
       const encoded = Buffer.from(SPEAK_SCRIPT, 'utf16le').toString('base64');
       this.#proc = spawn(WIN_POWERSHELL, ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded], {
         stdio: ['pipe', 'inherit', 'inherit'],
         windowsHide: true,
-        env: { ...process.env, CLAUDE_SAY_SAPI_VOICE: this.#voice, CLAUDE_SAY_SAPI_RATE: String(this.#rate) },
+        env: { ...process.env, VOICE_REPLY_SAPI_VOICE: this.#voice, VOICE_REPLY_SAPI_RATE: String(this.#rate) },
       });
       this.#proc.on('error', () => resolve());
       this.#proc.on('close', () => resolve());
@@ -105,7 +107,7 @@ class WindowsSapi {
 
 /** 環境変数の設定から作る */
 function create(env) {
-  return new WindowsSapi(env.CLAUDE_SAY_VOICE || DEFAULT_VOICE, parseRate(env.CLAUDE_SAY_WIN_RATE));
+  return new WindowsSapi(env.VOICE_REPLY_WIN_VOICE || DEFAULT_VOICE, parseRate(env.VOICE_REPLY_WIN_RATE));
 }
 
 module.exports = { create };

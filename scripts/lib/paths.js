@@ -18,4 +18,9 @@ function getWorkDir(dataDir) {
   return path.join(dataDir, 'tmp');
 }
 
-module.exports = { getDataDir, getWorkDir };
+/** 声が作った音声の一時ファイル（AivisSpeech の WAV）を置くフォルダ */
+function getAudioDir(dataDir) {
+  return path.join(dataDir, 'audio');
+}
+
+module.exports = { getDataDir, getWorkDir, getAudioDir };

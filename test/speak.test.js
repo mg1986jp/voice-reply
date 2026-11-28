@@ -1,18 +1,24 @@
 /**
  * Stop フック（scripts/speak.js）を実際に起動するテスト。声は test/fixtures/fake-say.js の偽物を使う。
  *   node --test test/*.test.js
+ *
+ * speak.js に渡す環境変数からは、PC に設定された voice-reply の設定（VOICE_REPLY_*）を取り除き、テストに要る値だけを入れる。
+ * VOICE_REPLY_ENGINE は初めから os にする（本物の AivisSpeech Engine が動いている PC でも、本物の声を出さないため）。
+ * AivisSpeech で読むテストは、テストの中で動く偽のエンジン（test/fixtures/fake-engine.js）につなぐ。
  */
 'use strict';
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { spawn } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const h = require('./helpers');
+const { startFakeEngine, fail, hold } = require('./fixtures/fake-engine');
 
 const SPEAK = path.join(__dirname, '..', 'scripts', 'speak.js');
 const FAKE_SAY = path.join(__dirname, 'fixtures', 'fake-say.js');
+const PLATFORM = path.join(__dirname, 'fixtures', 'platform.js');
 
 /** データフォルダと、偽の声の印を書くフォルダを用意する */
 function setup(t) {
@@ -27,7 +33,14 @@ function setup(t) {
 /** speak.js を Stop フックとして起動する。終わったら終了コードで resolve する */
 function runSpeak({ dataDir, voiceDir }, session, text, durationMs, extraEnv = {}) {
   const child = spawn(process.execPath, ['--require', FAKE_SAY, SPEAK], {
-    env: { ...process.env, CLAUDE_PLUGIN_DATA: dataDir, FAKE_VOICE_DIR: voiceDir, FAKE_VOICE_MS: String(durationMs), ...extraEnv },
+    env: {
+      ...h.envWithoutVoiceReply(),
+      CLAUDE_PLUGIN_DATA: dataDir,
+      FAKE_VOICE_DIR: voiceDir,
+      FAKE_VOICE_MS: String(durationMs),
+      VOICE_REPLY_ENGINE: 'os',
+      ...extraEnv,
+    },
     stdio: ['pipe', 'ignore', 'ignore'],
   });
   child.stdin.end(JSON.stringify({ session_id: session, last_assistant_message: `本文です。<speak>${text}</speak>`, cwd: '' }));
@@ -41,6 +54,10 @@ const has = (voiceDir, pid, name) => fs.existsSync(marker(voiceDir, pid, name));
 const content = (voiceDir, pid, name) => has(voiceDir, pid, name) && fs.readFileSync(marker(voiceDir, pid, name), 'utf8');
 /** speak.js が setTimeout() で作ったタイマーの長さ（ミリ秒）。プロセスが終わったあとに読む */
 const timers = (voiceDir, pid) => JSON.parse(fs.readFileSync(marker(voiceDir, pid, 'timers'), 'utf8'));
+/** 読み上げの時間の上限のタイマー（上限はいつも 30 秒以上。fetch が中で作る短いタイマーなどは除く） */
+const limitTimers = (voiceDir, pid) => timers(voiceDir, pid).filter((delay) => delay >= 30000);
+/** AivisSpeech で読ませるときの環境変数 */
+const aivisEnv = (engine) => ({ VOICE_REPLY_ENGINE: 'auto', VOICE_REPLY_AIVIS_URL: engine.url });
 
 test('同じタブの新しい返事が来ると、前の読み上げは自分の声を止めて終わり、新しい返事が読まれる', async (t) => {
   const env = setup(t);
@@ -188,7 +205,7 @@ test('止める処理が 2 回呼ばれても（時間切れのあとに差し�
 });
 
 test('上限のタイマーの長さは、声の速さ（Mac の -r）と読む文字数から決まる', async (t) => {
-  // [CLAUDE_SAY_RATE の値, 「短い返事」（4 文字）を読むときの上限（ミリ秒）]
+  // [VOICE_REPLY_MAC_RATE の値, 「短い返事」（4 文字）を読むときの上限（ミリ秒）]
   //   -r 260 は 1 秒 8 文字: 4 ÷ 8 = 0.5 秒 → × 2.5 + 30 秒 = 31250
   const cases = [
     ['260', 31250],
@@ -197,7 +214,7 @@ test('上限のタイマーの長さは、声の速さ（Mac の -r）と読む�
   ];
   for (const [rate, expected] of cases) {
     const env = setup(t);
-    const reading = runSpeak(env, 'tab-A', '短い返事', 200, { CLAUDE_SAY_RATE: rate });
+    const reading = runSpeak(env, 'tab-A', '短い返事', 200, { VOICE_REPLY_MAC_RATE: rate });
     assert.equal(await reading.exited, 0);
     assert.equal(timers(env.voiceDir, reading.pid).includes(expected), true, `-r ${rate} の上限は ${expected}ms`);
     assert.equal(has(env.voiceDir, reading.pid, 'done'), true, `-r ${rate}: 最後まで読む`);
@@ -225,4 +242,77 @@ test('読んでいる途中でオフにされても、最後まで読む', async
   assert.equal(has(env.voiceDir, reading.pid, 'done'), true, '最後まで読む');
   assert.equal(has(env.voiceDir, reading.pid, 'killed'), false);
   assert.equal(fs.existsSync(h.latestFile(env.workDir, 'tab-A')), true, 'タブの latest-* は消さない（古くなったら片付ける）');
+});
+
+test('AivisSpeech で読むときは、文に取りかかるたびに、その文の文字数で上限のタイマーを測り直す', async (t) => {
+  const env = setup(t);
+  const engine = await startFakeEngine(t);
+  const reading = runSpeak(env, 'tab-A', '一文目です。二文目は少し長い文章です。', 0, aivisEnv(engine));
+
+  assert.equal(await reading.exited, 0);
+  assert.equal(content(env.voiceDir, reading.pid, 'afplay'), 'WAV:一文目です。\nWAV:二文目は少し長い文章です。\n', 'AivisSpeech で 1 文ずつ鳴らす');
+  // 初期の速さ 1.4 は 1 秒 8.0267 文字（7.08 + 1.42 × 2/3）
+  //   1 文目 6 文字: 6 ÷ 8.0267 = 0.7475 秒 → × 2.5 + 30 秒 = 31868.8 → 31869
+  //   2 文目 13 文字: 13 ÷ 8.0267 = 1.6196 秒 → × 2.5 + 30 秒 = 34049.003 → 34050（ミリ秒の端数は切り上げる）
+  assert.deepEqual(limitTimers(env.voiceDir, reading.pid), [31869, 34050]);
+  assert.equal(has(env.voiceDir, reading.pid, 'started'), false, 'OS の声では読まない');
+  assert.equal(fs.existsSync(h.lockDir(env.workDir)), false, 'ロックが残らない');
+});
+
+test('AivisSpeech が 1 文目を鳴らす前に失敗して OS の声に切り替えたら、上限を OS の声の速さで、全体の文字数に測り直す', async (t) => {
+  const env = setup(t);
+  const engine = await startFakeEngine(t, { plan: { '/audio_query': { 1: fail(500) } } });
+  const reading = runSpeak(env, 'tab-A', '一文目です。二文目は少し長い文章です。', 0, aivisEnv(engine));
+
+  assert.equal(await reading.exited, 0);
+  assert.equal(content(env.voiceDir, reading.pid, 'started'), '一文目です。二文目は少し長い文章です。', 'OS の声で全部読む');
+  assert.equal(has(env.voiceDir, reading.pid, 'done'), true);
+  assert.equal(has(env.voiceDir, reading.pid, 'afplay'), false, 'AivisSpeech では何も鳴らしていない');
+  //   1 つ目は AivisSpeech の 1 文目（31869）、2 つ目は OS の声（Kyoko、1 秒 8 文字）の全体 19 文字: 19 ÷ 8 × 2.5 + 30 秒 = 35937.5 → 35938
+  assert.deepEqual(limitTimers(env.voiceDir, reading.pid), [31869, 35938]);
+});
+
+test('声を選んでいる最中（エンジンの応えを待っている間）に同じタブの新しい返事が来たら、選び終えても読まずに終わる', async (t) => {
+  const env = setup(t);
+  const engine = await startFakeEngine(t, { plan: { '/version': { other: hold } } });
+  const first = runSpeak(env, 'tab-A', '前の返事', 300, aivisEnv(engine));
+  await h.waitFor(() => engine.count('/version') === 1, 5000, '前の返事が、エンジンに問い合わせている');
+
+  const second = runSpeak(env, 'tab-A', '新しい返事', 300);
+  assert.equal(await first.exited, 0, '前の読み上げは、エンジンを待つのをやめたあと（1.5 秒）、読まずに自分で終わる');
+  assert.equal(await second.exited, 0);
+
+  assert.equal(has(env.voiceDir, first.pid, 'started'), false, '前の返事は読まない');
+  assert.equal(content(env.voiceDir, second.pid, 'started'), '新しい返事');
+  assert.equal(has(env.voiceDir, second.pid, 'done'), true);
+  assert.equal(fs.existsSync(h.lockDir(env.workDir)), false, 'ロックが残らない');
+});
+
+test('読み上げが動かない OS では、順番待ちにも入らずに、何もせずに終わる', (t) => {
+  const env = setup(t);
+  // OS は test/fixtures/platform.js で linux にする（声を出す前に終わるので、偽の声は使わない）
+  const result = spawnSync(process.execPath, ['--require', PLATFORM, SPEAK], {
+    env: { ...h.envWithoutVoiceReply(), CLAUDE_PLUGIN_DATA: env.dataDir, FAKE_PLATFORM: 'linux', VOICE_REPLY_ENGINE: 'os' },
+    input: JSON.stringify({ session_id: 'tab-A', last_assistant_message: '<speak>読まない返事</speak>', cwd: '' }),
+  });
+  assert.equal(result.status, 0);
+  assert.equal(fs.existsSync(env.workDir), false, '順番待ちのフォルダも作らない');
+});
+
+test('順番待ちの間（声を選ぶ前）に SIGTERM を受けたら、何も読まずに終わり、ほかのタブのロックに触らない', async (t) => {
+  const env = setup(t);
+  fs.mkdirSync(env.workDir);
+  const owner = { requestId: 'other-tab', session: 'tab-X' };
+  h.plantLock(env.workDir, { ...owner, beatAt: Date.now() });
+  const beat = setInterval(() => h.writeState(env.workDir, { ...owner, beatAt: Date.now() }), 300);
+  t.after(() => clearInterval(beat));
+  const trigger = path.join(env.voiceDir, 'sigterm');
+
+  const waiting = runSpeak(env, 'tab-B', '待っている返事', 300, { FAKE_SIGTERM_ON_FILE: trigger });
+  await h.waitFor(() => fs.existsSync(h.latestFile(env.workDir, 'tab-B')), 5000, '順番待ちに入る');
+  fs.writeFileSync(trigger, '');
+
+  assert.equal(await waiting.exited, 0);
+  assert.equal(has(env.voiceDir, waiting.pid, 'started'), false, '読まない');
+  assert.equal(h.readState(env.workDir).requestId, 'other-tab', 'ほかのタブのロックのまま');
 });

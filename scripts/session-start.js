@@ -15,12 +15,12 @@
 const { getDataDir } = require('./lib/paths');
 const { isEnabled } = require('./lib/state');
 const { readSpeakPrompt } = require('./lib/prompts');
-const { getVoice } = require('./voices');
+const { getOsVoice } = require('./voices');
 
 function main() {
   // データフォルダがないときや、OS に合う声がないときは、読み上げ（speak.js）も動かないので渡さない
   const dataDir = getDataDir();
-  if (!dataDir || !isEnabled(dataDir) || !getVoice()) return;
+  if (!dataDir || !isEnabled(dataDir) || !getOsVoice()) return;
   const prompt = readSpeakPrompt();
   if (!prompt) return;
   process.stdout.write(JSON.stringify({

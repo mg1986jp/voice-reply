@@ -19,7 +19,7 @@ const fs = require('node:fs');
 const { getDataDir } = require('./lib/paths');
 const { isEnabled, setEnabled } = require('./lib/state');
 const { readSpeakPrompt } = require('./lib/prompts');
-const { getVoice } = require('./voices');
+const { getOsVoice } = require('./voices');
 
 function readHookInput() {
   try {
@@ -59,7 +59,7 @@ function buildMessage(input) {
   if (!next) {
     return 'voice-reply の読み上げをオフにした。これ以降の返事は読み上げられないので、<speak> の要約は付けなくてよい。';
   }
-  if (!getVoice()) {
+  if (!getOsVoice()) {
     return 'voice-reply の読み上げをオンにした。ただし、この OS には対応する声がないため、読み上げは動かない。<speak> の要約は付けなくてよい。';
   }
   const prompt = readSpeakPrompt();
